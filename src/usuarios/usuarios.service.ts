@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Usuario } from './usuario.entity';
 
+/*O injectable é o que diz pro nest.js que a nossa classe pode ser injetada em outras classes
+caso contrario, nossa controller não conseguiria usar a nossa service. */
 @Injectable()
 export class UsuariosService {
   constructor(
@@ -10,7 +12,7 @@ export class UsuariosService {
     private usuarioRepository: Repository<Usuario>,
   ) {}
 
-  async criar(
+  async novoUsuario(
     nome: string,
     email: string,
     senha: string,

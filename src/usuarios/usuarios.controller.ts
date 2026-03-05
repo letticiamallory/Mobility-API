@@ -6,7 +6,7 @@ export class UsuariosController {
   constructor(private readonly usuariosService: UsuariosService) {}
 
   @Post()
-  async criar(
+  async novoUsuario(
     @Body()
     body: {
       nome: string;
@@ -15,7 +15,7 @@ export class UsuariosController {
       tipo_pcd: string;
     },
   ) {
-    return this.usuariosService.criar(
+    return this.usuariosService.novoUsuario(
       body.nome,
       body.email,
       body.senha,
