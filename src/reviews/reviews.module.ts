@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
-import { AvaliacoesService } from './avaliacoes.service';
-import { AvaliacoesController } from './avaliacoes.controller';
+import { AvaliacoesService } from './reviews.service';
+import { AvaliacoesController } from './reviews.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Avaliacao } from './avaliacoes.entity';
+import { Avaliacao } from './reviews.entity';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Avaliacao])],

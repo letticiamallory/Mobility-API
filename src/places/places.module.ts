@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { LocaisController } from './locais.controller';
-import { LocaisService } from './locais.service';
-import { Local } from './local.entity';
+import { LocaisController } from './places.controller';
+import { LocaisService } from './places.service';
+import { Local } from './places.entity';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Local])],

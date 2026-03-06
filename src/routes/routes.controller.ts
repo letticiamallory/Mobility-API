@@ -1,11 +1,11 @@
 import { Controller, Post, Body, Get, Param } from '@nestjs/common';
-import { RotasService } from './rotas.service';
+import { RotasService } from './routes.service';
 
 @Controller('rotas')
 export class RotasController {
   constructor(private rotasService: RotasService) {}
 
-  @Post()
+  @Post('verificar')
   async rotaAcessivel(
     @Body()
     body: {
