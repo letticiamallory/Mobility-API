@@ -5,22 +5,22 @@ import {
   CreateDateColumn,
 } from 'typeorm';
 
-@Entity('avaliacoes')
-export class Avaliacao {
+@Entity('reviews')
+export class Reviews {
   @PrimaryGeneratedColumn()
   id: number;
 
   @Column()
-  usuario_id: number;
+  user_id: number;
 
   @Column()
-  local_id: number;
+  place_id: number;
 
   @Column()
-  acessivel: boolean;
+  accessible: boolean;
 
   @Column({ nullable: true })
-  comentario: string;
+  comment: string;
 
   @CreateDateColumn()
   created_at: Date;

@@ -23,7 +23,7 @@ export class Places {
   address: string;
 
   @Column()
-  acessible: boolean;
+  accessible: boolean;
 
   @Column()
   disability_type: string;

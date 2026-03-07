@@ -1,30 +1,30 @@
 import { Controller, Get, Post, Body, Param } from '@nestjs/common';
-import { UsuariosService } from './users.service';
+import { UsersService } from './users.service';
 
-@Controller('usuarios')
-export class UsuariosController {
-  constructor(private readonly usuariosService: UsuariosService) {}
+@Controller('users')
+export class UsersController {
+  constructor(private readonly usersService: UsersService) {}
 
   @Post()
-  async novoUsuario(
+  async newUser(
     @Body()
     body: {
-      nome: string;
+      name: string;
       email: string;
-      senha: string;
-      tipo_pcd: string;
+      password: string;
+      disability_type: string;
     },
   ) {
-    return this.usuariosService.novoUsuario(
-      body.nome,
+    return this.usersService.newUser(
+      body.name,
       body.email,
-      body.senha,
-      body.tipo_pcd,
+      body.password,
+      body.disability_type,
     );
   }
   // Com os : na frente do id, o nest.js entende que estamos dando um "apelido" ao id, mas que ali entra qualquer valor
   @Get(':id')
-  async buscarPorId(@Param('id') id: string) {
-    return this.usuariosService.buscarPorId(Number(id));
+  async getUserById(@Param('id') id: string) {
+    return this.usersService.getUserById(Number(id));
   }
 }

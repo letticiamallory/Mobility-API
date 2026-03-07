@@ -1,63 +1,63 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Local } from './places.entity';
+import { Places } from './places.entity';
 
 @Injectable()
-export class LocaisService {
+export class PlacesService {
   constructor(
-    @InjectRepository(Local)
-    private localRepository: Repository<Local>,
+    @InjectRepository(Places)
+    private placesRepository: Repository<Places>,
   ) {}
 
-  async novoLocal(
-    nome: string,
-    tipo: string,
-    cidade: string,
-    endereco: string,
-    acessivel: boolean,
-    tipo_pcd: string,
-    observacao?: string,
-  ): Promise<Local> {
-    const local = this.localRepository.create({
-      nome,
-      tipo,
-      cidade,
-      endereco,
-      acessivel,
-      tipo_pcd,
-      observacao,
+  async newPlace(
+    name: string,
+    type: string,
+    city: string,
+    address: string,
+    accessible: boolean,
+    disability_type: string,
+    observation?: string,
+  ): Promise<Places> {
+    const place = this.placesRepository.create({
+      name,
+      type,
+      city,
+      address,
+      accessible,
+      disability_type,
+      observation,
     });
-    return this.localRepository.save(local);
+    return this.placesRepository.save(place);
   }
 
-  async listar(): Promise<Local[]> {
-    return this.localRepository.find();
+  async findAll(): Promise<Places[]> {
+    return this.placesRepository.find();
   }
 
-  async buscarPorId(id: number): Promise<Local | null> {
-    return this.localRepository.findOne({ where: { id } });
+  async getById(id: number): Promise<Places | null> {
+    return this.placesRepository.findOne({ where: { id } });
   }
 
-  async atualizar(
+  async updateById(
     id: number,
-    nome: string,
-    tipo: string,
-    cidade: string,
-    endereco: string,
-    acessivel: boolean,
-    tipo_pcd: string,
-    observacao?: string,
-  ): Promise<Local | null> {
-    await this.localRepository.update(id, {
-      nome,
-      tipo,
-      cidade,
-      endereco,
-      acessivel,
-      tipo_pcd,
-      observacao,
+    name: string,
+    type: string,
+    city: string,
+    address: string,
+    accessible: boolean,
+    disability_type: string,
+    observation?: string,
+  ): Promise<Places | null> {
+    await this.placesRepository.update(id, {
+      name,
+      type,
+      city,
+      address,
+      accessible,
+      disability_type,
+      observation,
     });
-    return this.buscarPorId(id);
+    return this.getById(id);
   }
 }

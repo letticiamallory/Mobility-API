@@ -1,41 +1,37 @@
 import { Controller, Post, Body, Get, Param } from '@nestjs/common';
-import { RotasService } from './routes.service';
+import { RoutesService } from './routes.service';
 
-@Controller('rotas')
-export class RotasController {
-  constructor(private rotasService: RotasService) {}
+@Controller('routes')
+export class RoutesController {
+  constructor(private routesService: RoutesService) {}
 
-  @Post('verificar')
-  async rotaAcessivel(
+  @Post('check')
+  async checkRoute(
     @Body()
     body: {
-      usuario_id: number;
-      origem: string;
-      destino: string;
-      meio_transporte: string;
-      acessivel: boolean;
+      user_id: number;
+      origin: string;
+      destination: string;
+      transport_type: string;
+      accessible: boolean;
     },
   ) {
-    return this.rotasService.rotaAcessivel(
-      body.usuario_id,
-      body.origem,
-      body.destino,
-      body.meio_transporte,
-      body.acessivel,
+    return this.routesService.checkRoute(
+      body.user_id,
+      body.origin,
+      body.destination,
+      body.transport_type,
+      body.accessible,
     );
   }
 
   @Get(':id')
-  async buscarRotaPorId(@Param('id') id: string) {
-    return this.rotasService.buscarRotaPorId(Number(id));
+  async getRouteById(@Param('id') id: string) {
+    return this.routesService.getRouteById(Number(id));
   }
 
-  @Get('historico/:usuario_id')
-  async buscarHistoricoRotaPorUsuarioId(
-    @Param('usuario_id') usuario_id: string,
-  ) {
-    return this.rotasService.buscarHistoricoRotaPorUsuarioId(
-      Number(usuario_id),
-    );
+  @Get('history/:user_id')
+  async findHistoryByUserId(@Param('user_id') user_id: string) {
+    return this.routesService.findHistoryByUserId(Number(user_id));
   }
 }

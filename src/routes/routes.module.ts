@@ -1,12 +1,14 @@
 import { Module } from '@nestjs/common';
-import { RotasService } from './routes.service';
-import { RotasController } from './routes.controller';
+import { RoutesService } from './routes.service';
+import { RoutesController } from './routes.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Rota } from './routes.entity';
+import { Routes } from './routes.entity';
+import { OrsService } from './ors.service';
+import { NominatimService } from './nominatim.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Rota])],
-  providers: [RotasService],
-  controllers: [RotasController],
+  imports: [TypeOrmModule.forFeature([Routes])],
+  providers: [RoutesService, OrsService, NominatimService],
+  controllers: [RoutesController],
 })
-export class RotasModule {}
+export class RoutesModule {}

@@ -1,68 +1,68 @@
 import { Body, Controller, Get, Param, Post, Put } from '@nestjs/common';
-import { LocaisService } from './places.service';
+import { PlacesService } from './places.service';
 
-@Controller('locais')
-export class LocaisController {
-  constructor(private readonly locaisService: LocaisService) {}
+@Controller('places')
+export class PlacesController {
+  constructor(private readonly placesService: PlacesService) {}
 
   @Post()
-  async novoLocal(
+  async newPlace(
     @Body()
     body: {
-      nome: string;
-      tipo: string;
-      cidade: string;
-      endereco: string;
-      acessivel: boolean;
-      tipo_pcd: string;
-      observacao?: string;
+      name: string;
+      type: string;
+      city: string;
+      address: string;
+      accessible: boolean;
+      disability_type: string;
+      observation?: string;
     },
   ) {
-    return this.locaisService.novoLocal(
-      body.nome,
-      body.tipo,
-      body.cidade,
-      body.endereco,
-      body.acessivel,
-      body.tipo_pcd,
-      body.observacao,
+    return this.placesService.newPlace(
+      body.name,
+      body.type,
+      body.city,
+      body.address,
+      body.accessible,
+      body.disability_type,
+      body.observation,
     );
   }
 
   @Get()
-  async listar() {
-    return this.locaisService.listar();
+  async findAll() {
+    return this.placesService.findAll();
   }
 
   @Get(':id')
-  async buscarPorId(@Param('id') id: string) {
-    return this.locaisService.buscarPorId(Number(id));
+  async getById(@Param('id') id: string) {
+    return this.placesService.getById(Number(id));
   }
 
   @Put(':id')
-  async atualizar(
+  async updateById(
     @Param('id') id: string,
     @Body()
     body: {
       id: number;
-      nome: string;
-      tipo: string;
-      cidade: string;
-      endereco: string;
-      acessivel: boolean;
-      tipo_pcd: string;
-      observacao?: string;
+      name: string;
+      type: string;
+      city: string;
+      address: string;
+      accessible: boolean;
+      disability_type: string;
+      observation?: string;
     },
   ) {
-    return this.locaisService.atualizar(
+    return this.placesService.updateById(
       Number(id),
-      body.nome,
-      body.tipo,
-      body.cidade,
-      body.endereco,
-      body.acessivel,
-      body.tipo_pcd,
-      body.observacao,
+      body.name,
+      body.type,
+      body.city,
+      body.address,
+      body.accessible,
+      body.disability_type,
+      body.observation,
     );
   }
 }

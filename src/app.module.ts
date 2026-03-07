@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { UsuariosModule } from './usuarios/usuarios.module';
-import { LocaisModule } from './locais/locais.module';
-import { RotasModule } from './rotas/rotas.module';
-import { AvaliacoesModule } from './avaliacoes/avaliacoes.module';
+import { UsersModule } from './users/users.module';
+import { PlacesModule } from './places/places.module';
+import { RoutesModule } from './routes/routes.module';
+import { ReviewsModule } from './reviews/reviews.module';
 
 @Module({
   imports: [
@@ -21,10 +21,10 @@ import { AvaliacoesModule } from './avaliacoes/avaliacoes.module';
       autoLoadEntities: true,
       synchronize: false,
     }),
-    UsuariosModule,
-    LocaisModule,
-    RotasModule,
-    AvaliacoesModule,
+    UsersModule,
+    PlacesModule,
+    RoutesModule,
+    ReviewsModule,
   ],
 })
 export class AppModule {}

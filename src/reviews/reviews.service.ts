@@ -1,27 +1,31 @@
 import { Injectable } from '@nestjs/common';
-import { Avaliacao } from './reviews.entity';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { Reviews } from './reviews.entity';
 
 @Injectable()
-export class AvaliacoesService {
-  constructor(private avaliacaoRepository: Repository<Avaliacao>) {}
+export class ReviewsService {
+  constructor(
+    @InjectRepository(Reviews)
+    private reviewsRepository: Repository<Reviews>,
+  ) {}
 
-  async novaAvaliacao(
-    usuario_id: number,
-    local_id: number,
-    acessivel: boolean,
-    comentario?: string,
-  ): Promise<Avaliacao> {
-    const avaliacao = this.avaliacaoRepository.create({
-      usuario_id,
-      local_id,
-      acessivel,
-      comentario,
+  async newReview(
+    user_id: number,
+    place_id: number,
+    accessible: boolean,
+    comment?: string,
+  ): Promise<Reviews> {
+    const review = this.reviewsRepository.create({
+      user_id,
+      place_id,
+      accessible,
+      comment,
     });
-    return this.avaliacaoRepository.save(avaliacao);
+    return this.reviewsRepository.save(review);
   }
 
-  async buscarAvaliacaoPorId(id: number): Promise<Avaliacao | null> {
-    return this.avaliacaoRepository.findOne({ where: { id } });
+  async getReviewById(id: number): Promise<Reviews | null> {
+    return this.reviewsRepository.findOne({ where: { id } });
   }
 }

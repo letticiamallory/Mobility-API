@@ -5,22 +5,22 @@ import {
   CreateDateColumn,
 } from 'typeorm';
 
-@Entity('usuarios')
-export class Usuario {
+@Entity('users')
+export class User {
   @PrimaryGeneratedColumn()
   id: number;
 
   @Column()
-  nome: string;
+  name: string;
 
   @Column()
   email: string;
 
   @Column()
-  senha: string;
+  password: string;
 
   @Column()
-  tipo_pcd: string;
+  disability_type: string;
 
   @CreateDateColumn()
   created_at: Date;

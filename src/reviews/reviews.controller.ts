@@ -1,30 +1,30 @@
 import { Controller, Post, Get, Body, Param } from '@nestjs/common';
-import { AvaliacoesService } from './reviews.service';
+import { ReviewsService } from './reviews.service';
 
-@Controller('avaliacoes')
-export class AvaliacoesController {
-  constructor(private avaliacoesService: AvaliacoesService) {}
+@Controller('reviews')
+export class ReviewsController {
+  constructor(private reviewsService: ReviewsService) {}
 
   @Post()
-  async novaAvaliacao(
+  async newReview(
     @Body()
     body: {
-      usuario_id: number;
-      local_id: number;
-      acessivel: boolean;
-      comentario?: string;
+      user_id: number;
+      place_id: number;
+      acessible: boolean;
+      comment?: string;
     },
   ) {
-    return this.avaliacoesService.novaAvaliacao(
-      body.usuario_id,
-      body.local_id,
-      body.acessivel,
-      body.comentario,
+    return this.reviewsService.newReview(
+      body.user_id,
+      body.place_id,
+      body.acessible,
+      body.comment,
     );
   }
 
   @Get(':id')
-  async buscarAvaliacaoPorId(@Param('id') id: string) {
-    return this.avaliacoesService.buscarAvaliacaoPorId(Number(id));
+  async getReviewById(@Param('id') id: string) {
+    return this.reviewsService.getReviewById(Number(id));
   }
 }
