@@ -6,13 +6,13 @@ API REST que ajuda PCDs a encontrarem trajetos urbanos seguros e acessíveis. O 
  
 ## 🛠️ Tech Stack
  
-- **Node.js** + **NestJS** — framework modular e escalável para APIs REST
-- **TypeORM** + **PostgreSQL** — persistência de dados com entidades tipadas
-- **Google Maps Directions API** — cálculo de rotas e etapas de transporte
-- **Google Street View API** — imagens reais dos trechos a pé da rota
-- **Gemini 2.5 Flash (Google AI)** — análise de acessibilidade via visão computacional
-- **OpenRouteService (ORS)** — roteamento especializado para cadeirantes
-- **Nominatim (OpenStreetMap)** — geocodificação de endereços
+- **Node.js** + **NestJS**: framework modular e escalável para APIs REST
+- **TypeORM** + **PostgreSQL**: persistência de dados com entidades tipadas
+- **Google Maps Directions API**: cálculo de rotas e etapas de transporte
+- **Google Street View API**: imagens reais dos trechos a pé da rota
+- **Gemini 2.5 Flash (Google AI)**: análise de acessibilidade via visão computacional
+- **OpenRouteService (ORS)**: roteamento especializado para cadeirantes
+- **Nominatim (OpenStreetMap)**: geocodificação de endereços
  
 ---
  
