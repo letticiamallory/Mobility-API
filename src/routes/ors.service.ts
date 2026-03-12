@@ -4,6 +4,10 @@ interface OrsStep {
   instruction: string;
 }
 
+interface OrsGeometry {
+  coordinates: number[][];
+}
+
 interface OrsRoute {
   summary: {
     distance: number;
@@ -12,10 +16,23 @@ interface OrsRoute {
   segments: {
     steps: OrsStep[];
   }[];
+  geometry: OrsGeometry;
 }
 
 interface OrsResponse {
   routes: OrsRoute[];
+}
+
+interface OrsRouteResult {
+  distance_km: string;
+  duration_minutes: number;
+  instructions: string[];
+  coordinates: OrsCoordinate[];
+}
+
+interface OrsCoordinate {
+  latitude: number;
+  longitude: number;
 }
 
 @Injectable()
@@ -25,7 +42,7 @@ export class OrsService {
     originLon: number,
     destLat: number,
     destLon: number,
-  ) {
+  ): Promise<OrsRouteResult | null> {
     const response = await fetch(
       'https://api.openrouteservice.org/v2/directions/wheelchair',
       {
@@ -45,6 +62,7 @@ export class OrsService {
     );
 
     const data = (await response.json()) as OrsResponse;
+    console.log('ORS response:', JSON.stringify(data));
 
     if (!data.routes || data.routes.length === 0) {
       return null;
@@ -57,6 +75,7 @@ export class OrsService {
       instructions: route.segments[0].steps.map(
         (step: OrsStep) => step.instruction,
       ),
+      coordinates: [],
     };
   }
 }

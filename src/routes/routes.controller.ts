@@ -13,7 +13,6 @@ export class RoutesController {
       origin: string;
       destination: string;
       transport_type: string;
-      accessible: boolean;
     },
   ) {
     return this.routesService.checkRoute(
@@ -21,7 +20,6 @@ export class RoutesController {
       body.origin,
       body.destination,
       body.transport_type,
-      body.accessible,
     );
   }
 
