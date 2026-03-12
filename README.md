@@ -1,6 +1,3 @@
-D
-Copiar
-
 # 🦽 Mobility
  
 API REST que ajuda PCDs a encontrarem trajetos urbanos seguros e acessíveis. O sistema analisa rotas em tempo real usando Street View e IA para identificar obstáculos como calçadas quebradas, ausência de rampas e bloqueios no caminho.
