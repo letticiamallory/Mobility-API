@@ -1,10 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { Reviews } from './reviews.entity';
 import { Repository } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
 
 @Injectable()
 export class ReviewsService {
-  constructor(private reviewsRepository: Repository<Reviews>) {}
+  constructor(
+    @InjectRepository(Reviews)
+    private reviewsRepository: Repository<Reviews>,
+  ) {}
 
   async newReview(
     user_id: number,
