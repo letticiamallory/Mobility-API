@@ -7,7 +7,9 @@ interface NominatimResult {
 
 @Injectable()
 export class NominatimService {
-  async getCoordinates(address: string): Promise<{ lat: number; lon: number } | null> {
+  async getCoordinates(
+    address: string,
+  ): Promise<{ lat: number; lon: number } | null> {
     const response = await fetch(
       `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`,
       { headers: { 'User-Agent': 'MobilityAPI/1.0' } },

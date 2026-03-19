@@ -4,7 +4,11 @@ import { Repository } from 'typeorm';
 import { Routes } from './routes.entity';
 import { StreetViewService } from './streetview.service';
 import { GeminiService } from './gemini.service';
-import { GoogleRoutesService, RouteOption, RouteStage } from './google-routes.service';
+import {
+  GoogleRoutesService,
+  RouteOption,
+  RouteStage,
+} from './google-routes.service';
 
 @Injectable()
 export class RoutesService {
@@ -57,12 +61,15 @@ export class RoutesService {
             console.log('Street View URL:', imageUrl);
 
             if (imageUrl) {
-              const result = await this.geminiService.analyzeAccessibility(imageUrl);
+              const result =
+                await this.geminiService.analyzeAccessibility(imageUrl);
               console.log('Gemini result:', JSON.stringify(result));
 
               if (!result.accessible) {
                 stage.accessible = false;
-                stage.warning = result.warning ?? 'Possível obstáculo identificado nesse trecho — avalie se consegue passar ou prefira uma alternativa';
+                stage.warning =
+                  result.warning ??
+                  'Possível obstáculo identificado nesse trecho — avalie se consegue passar ou prefira uma alternativa';
                 stage.street_view_image = imageUrl;
                 break; // Para de analisar os outros pontos se já encontrou problema
               }
