@@ -1,23 +1,24 @@
-import { Body, Controller, Get, Param, Post, Put } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Put,
+  UseGuards,
+} from '@nestjs/common';
 import { PlacesService } from './places.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { CreatePlaceDto } from './dto/create-place.dto';
+import { UpdatePlaceDto } from './dto/update-place.dto';
 
+@UseGuards(JwtAuthGuard)
 @Controller('places')
 export class PlacesController {
   constructor(private readonly placesService: PlacesService) {}
 
   @Post()
-  async newPlace(
-    @Body()
-    body: {
-      name: string;
-      type: string;
-      city: string;
-      address: string;
-      accessible: boolean;
-      disability_type: string;
-      observation?: string;
-    },
-  ) {
+  async newPlace(@Body() body: CreatePlaceDto) {
     return this.placesService.newPlace(
       body.name,
       body.type,
@@ -42,27 +43,17 @@ export class PlacesController {
   @Put(':id')
   async updateById(
     @Param('id') id: string,
-    @Body()
-    body: {
-      id: number;
-      name: string;
-      type: string;
-      city: string;
-      address: string;
-      accessible: boolean;
-      disability_type: string;
-      observation?: string;
-    },
+    @Body() body: UpdatePlaceDto, // ← atualizado
   ) {
     return this.placesService.updateById(
       Number(id),
-      body.name,
-      body.type,
-      body.city,
-      body.address,
-      body.accessible,
-      body.disability_type,
-      body.observation,
+      body.name!,
+      body.type!,
+      body.city!,
+      body.address!,
+      body.accessible!,
+      body.disability_type!,
+      body.observation!,
     );
   }
 }

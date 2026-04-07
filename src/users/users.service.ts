@@ -19,7 +19,7 @@ export class UsersService {
     password: string,
     disability_type: string,
   ): Promise<User> {
-    const hashedPassword = await bcrypt.hash(password, 10); 
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     const users = this.usersRepository.create({
       name,

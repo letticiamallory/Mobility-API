@@ -9,21 +9,21 @@ import { Exclude } from 'class-transformer';
 @Entity('users')
 export class User {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column()
-  name: string;
+  name!: string;
 
   @Column()
-  email: string;
+  email!: string;
 
   @Column()
   @Exclude()
-  password: string;
+  password!: string;
 
   @Column()
-  disability_type: string;
+  disability_type!: string;
 
   @CreateDateColumn()
-  created_at: Date;
+  created_at!: Date;
 }
