@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Routes } from './routes.entity';
@@ -115,8 +115,14 @@ export class RoutesService {
     };
   }
 
-  async getRouteById(id: number): Promise<Routes | null> {
-    return this.routesRepository.findOne({ where: { id } });
+  async getRouteById(id: number): Promise<Routes> {
+    const route = await this.routesRepository.findOne({ where: { id } });
+
+    if (!route) {
+      throw new NotFoundException(`Rota com id ${id} não encontrada`);
+    }
+
+    return route;
   }
 
   async findHistoryByUserId(user_id: number): Promise<Routes[]> {

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Places } from './places.entity';
@@ -35,8 +35,14 @@ export class PlacesService {
     return this.placesRepository.find();
   }
 
-  async getById(id: number): Promise<Places | null> {
-    return this.placesRepository.findOne({ where: { id } });
+  async getById(id: number): Promise<Places> {
+    const place = await this.placesRepository.findOne({ where: { id } });
+
+    if (!place) {
+      throw new NotFoundException(`Local com id ${id} não encontrado`);
+    }
+
+    return place;
   }
 
   async updateById(
@@ -48,7 +54,7 @@ export class PlacesService {
     accessible: boolean,
     disability_type: string,
     observation?: string,
-  ): Promise<Places | null> {
+  ): Promise<Places> {
     await this.placesRepository.update(id, {
       name,
       type,

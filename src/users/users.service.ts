@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './users.entity';
@@ -29,8 +29,14 @@ export class UsersService {
     });
     return this.usersRepository.save(users);
   }
-  // o | determina que a variavel pode ser de mais de um tipo, ou é usuario ou é null.
-  async getUserById(id: number): Promise<User | null> {
-    return this.usersRepository.findOne({ where: { id } });
+
+  async getUserById(id: number): Promise<User> {
+    const user = await this.usersRepository.findOne({ where: { id } });
+
+    if (!user) {
+      throw new NotFoundException(`Usuário com id ${id} não encontrado`);
+    }
+
+    return user;
   }
 }

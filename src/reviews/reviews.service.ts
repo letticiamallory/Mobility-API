@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { Reviews } from './reviews.entity';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -25,7 +25,13 @@ export class ReviewsService {
     return this.reviewsRepository.save(review);
   }
 
-  async getReviewById(id: number): Promise<Reviews | null> {
-    return this.reviewsRepository.findOne({ where: { id } });
+  async getReviewById(id: number): Promise<Reviews> {
+    const review = await this.reviewsRepository.findOne({ where: { id } });
+
+    if (!review) {
+      throw new NotFoundException(`Avaliação com id ${id} não encontrada`);
+    }
+
+    return review;
   }
 }
