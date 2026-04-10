@@ -1,4 +1,12 @@
-import { Controller, Post, Body, Get, Param, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  Param,
+  UseGuards,
+  ParseIntPipe,
+} from '@nestjs/common';
 import { RoutesService } from './routes.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CheckRouteDto } from './dto/check-route.dto';
@@ -19,12 +27,12 @@ export class RoutesController {
   }
 
   @Get(':id')
-  async getRouteById(@Param('id') id: string) {
-    return this.routesService.getRouteById(Number(id));
+  async getRouteById(@Param('id', ParseIntPipe) id: number) {
+    return this.routesService.getRouteById(id);
   }
 
   @Get('history/:user_id')
-  async findHistoryByUserId(@Param('user_id') user_id: string) {
-    return this.routesService.findHistoryByUserId(Number(user_id));
+  async findHistoryByUserId(@Param('user_id', ParseIntPipe) user_id: number) {
+    return this.routesService.findHistoryByUserId(user_id);
   }
 }

@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, UseGuards, ParseIntPipe } from '@nestjs/common';
 import { ReviewsService } from './reviews.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CreateReviewDto } from './dto/create-review.dto';
@@ -19,7 +19,7 @@ export class ReviewsController {
   }
 
   @Get(':id')
-  async getReviewById(@Param('id') id: string) {
-    return this.reviewsService.getReviewById(Number(id));
+  async getReviewById(@Param('id', ParseIntPipe) id: number) {
+    return this.reviewsService.getReviewById(id);
   }
 }

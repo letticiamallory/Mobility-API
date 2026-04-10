@@ -6,6 +6,7 @@ import {
   Post,
   Put,
   UseGuards,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { PlacesService } from './places.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -36,17 +37,17 @@ export class PlacesController {
   }
 
   @Get(':id')
-  async getById(@Param('id') id: string) {
-    return this.placesService.getById(Number(id));
+  async getById(@Param('id', ParseIntPipe) id: number) {
+    return this.placesService.getById(id);
   }
 
   @Put(':id')
   async updateById(
-    @Param('id') id: string,
-    @Body() body: UpdatePlaceDto, // ← atualizado
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: UpdatePlaceDto,
   ) {
     return this.placesService.updateById(
-      Number(id),
+      id,
       body.name!,
       body.type!,
       body.city!,
