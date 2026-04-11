@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 interface TransitStep {
   html_instructions: string;
@@ -56,45 +56,60 @@ export interface RouteOption {
 
 @Injectable()
 export class GoogleRoutesService {
+  private readonly logger = new Logger(GoogleRoutesService.name);
+
   async getRouteOptions(
     origin: string,
     destination: string,
   ): Promise<RouteOption[] | null> {
-    const apiKey = process.env.GOOGLE_API_KEY ?? '';
+    try {
+      const apiKey = process.env.GOOGLE_API_KEY ?? '';
 
-    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&mode=transit&alternatives=true&language=pt-BR&key=${apiKey}`;
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&mode=transit&alternatives=true&language=pt-BR&key=${apiKey}`;
 
-    const response = await fetch(url);
-    const data = (await response.json()) as GoogleRoutesResponse;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Google Routes API error: ${response.status}`);
+      }
 
-    if (data.status !== 'OK' || data.routes.length === 0) {
+      const data = (await response.json()) as GoogleRoutesResponse;
+
+      if (data.status !== 'OK' || data.routes.length === 0) {
+        return null;
+      }
+
+      return data.routes.map((route: TransitRoute, routeIndex: number) => {
+        const leg = route.legs[0];
+
+        const stages = leg.steps.map(
+          (step: TransitStep, stepIndex: number) => ({
+            stage: stepIndex + 1,
+            mode: step.travel_mode === 'WALKING' ? 'walking' : 'transit',
+            instruction: step.html_instructions.replace(/<[^>]*>/g, ''),
+            distance: step.distance.text,
+            duration: step.duration.text,
+            location: step.start_location,
+            end_location: step.end_location,
+            departure: step.transit_details?.departure_stop.name ?? undefined,
+            arrival: step.transit_details?.arrival_stop.name ?? undefined,
+            accessible: true,
+            warning: null,
+            street_view_image: null,
+          }),
+        );
+
+        return {
+          route_id: routeIndex + 1,
+          total_distance: leg.distance.text,
+          total_duration: leg.duration.text,
+          stages,
+        };
+      });
+    } catch (error) {
+      this.logger.error(
+        `Erro no GoogleRoutesService: ${(error as Error).message}`,
+      );
       return null;
     }
-
-    return data.routes.map((route: TransitRoute, routeIndex: number) => {
-      const leg = route.legs[0];
-
-      const stages = leg.steps.map((step: TransitStep, stepIndex: number) => ({
-        stage: stepIndex + 1,
-        mode: step.travel_mode === 'WALKING' ? 'walking' : 'transit',
-        instruction: step.html_instructions.replace(/<[^>]*>/g, ''),
-        distance: step.distance.text,
-        duration: step.duration.text,
-        location: step.start_location,
-        end_location: step.end_location,
-        departure: step.transit_details?.departure_stop.name ?? undefined,
-        arrival: step.transit_details?.arrival_stop.name ?? undefined,
-        accessible: true,
-        warning: null,
-        street_view_image: null,
-      }));
-
-      return {
-        route_id: routeIndex + 1,
-        total_distance: leg.distance.text,
-        total_duration: leg.duration.text,
-        stages,
-      };
-    });
   }
 }
