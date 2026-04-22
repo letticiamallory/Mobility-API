@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  Logger,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Routes } from './routes.entity';
@@ -12,6 +17,8 @@ import {
 
 @Injectable()
 export class RoutesService {
+  private readonly logger = new Logger(RoutesService.name);
+
   constructor(
     @InjectRepository(Routes)
     private routesRepository: Repository<Routes>,
@@ -27,103 +34,110 @@ export class RoutesService {
     transport_type: string,
     accompanied?: string,
   ): Promise<object> {
-    const routeOptions = await this.googleRoutesService.getRouteOptions(
-      origin,
-      destination,
-    );
+    try {
+      const routeOptions = await this.googleRoutesService.getRouteOptions(
+        origin,
+        destination,
+      );
 
-    if (!routeOptions || routeOptions.length === 0) {
-      return { message: 'No route found' };
-    }
+      if (!routeOptions || routeOptions.length === 0) {
+        return { message: 'No route found' };
+      }
 
-    const analyzedRoutes: (RouteOption & { accessible: boolean })[] = [];
+      const analyzedRoutes: (RouteOption & { accessible: boolean })[] = [];
 
-    for (const option of routeOptions) {
-      const analyzedStages: RouteStage[] = [];
+      for (const option of routeOptions) {
+        const analyzedStages: RouteStage[] = [];
 
-      for (const stage of option.stages) {
-        if (stage.mode === 'walking') {
-          // Analisa 3 pontos: início, meio e fim
-          const pointsToAnalyze = [
-            stage.location,
-            {
-              lat: (stage.location.lat + stage.end_location.lat) / 2,
-              lng: (stage.location.lng + stage.end_location.lng) / 2,
-            },
-            stage.end_location,
-          ];
+        for (const stage of option.stages) {
+          if (stage.mode === 'walking') {
+            // Analisa 3 pontos: início, meio e fim
+            const pointsToAnalyze = [
+              stage.location,
+              {
+                lat: (stage.location.lat + stage.end_location.lat) / 2,
+                lng: (stage.location.lng + stage.end_location.lng) / 2,
+              },
+              stage.end_location,
+            ];
 
-          for (const point of pointsToAnalyze) {
-            const imageUrl = await this.streetViewService.getImage(
-              point.lat,
-              point.lng,
-            );
+            for (const point of pointsToAnalyze) {
+              const imageUrl = await this.streetViewService.getImage(
+                point.lat,
+                point.lng,
+              );
 
-            console.log('Street View URL:', imageUrl);
+              this.logger.log(`Street View URL: ${imageUrl}`);
 
-            if (imageUrl) {
-              const result =
-                await this.geminiService.analyzeAccessibility(imageUrl);
-              console.log('Gemini result:', JSON.stringify(result));
+              if (imageUrl) {
+                const result =
+                  await this.geminiService.analyzeAccessibility(imageUrl);
+                this.logger.log(`Gemini result: ${JSON.stringify(result)}`);
 
-              if (!result.accessible) {
-                stage.accessible = false;
-                stage.warning =
-                  result.warning ??
-                  'Possível obstáculo identificado nesse trecho — avalie se consegue passar ou prefira uma alternativa';
-                stage.street_view_image = imageUrl;
-                break; // Para de analisar os outros pontos se já encontrou problema
+                if (!result.accessible) {
+                  stage.accessible = false;
+                  stage.warning =
+                    result.warning ??
+                    'Possível obstáculo identificado nesse trecho — avalie se consegue passar ou prefira uma alternativa';
+                  stage.street_view_image = imageUrl;
+                  break; // Para de analisar os outros pontos se já encontrou problema
+                }
               }
             }
           }
+
+          analyzedStages.push(stage);
         }
 
-        analyzedStages.push(stage);
+        const routeAccessible = analyzedStages.every((s) => s.accessible);
+
+        analyzedRoutes.push({
+          ...option,
+          stages: analyzedStages,
+          accessible: routeAccessible,
+        });
       }
 
-      const routeAccessible = analyzedStages.every((s) => s.accessible);
+      const sortedRoutes = analyzedRoutes
+        .sort((a, b) => {
+          if (a.accessible && !b.accessible) return -1;
+          if (!a.accessible && b.accessible) return 1;
 
-      analyzedRoutes.push({
-        ...option,
-        stages: analyzedStages,
-        accessible: routeAccessible,
-      });
+          const getDurationInMinutes = (duration: string): number => {
+            const minutes = Number.parseInt(duration, 10);
+            return Number.isNaN(minutes) ? Number.MAX_SAFE_INTEGER : minutes;
+          };
+
+          return (
+            getDurationInMinutes(a.total_duration) -
+            getDurationInMinutes(b.total_duration)
+          );
+        })
+        .slice(0, 3);
+
+      const bestRoute =
+        sortedRoutes.find((r) => r.accessible) ?? sortedRoutes[0];
+
+      const savedRoute = await this.routesRepository.save(
+        this.routesRepository.create({
+          user_id,
+          origin,
+          destination,
+          transport_type,
+          accompanied: accompanied ?? 'both',
+          accessible: bestRoute.accessible,
+        }),
+      );
+
+      return {
+        route: savedRoute,
+        routes: sortedRoutes,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Erro ao calcular rota: ${message}`);
+      throw new InternalServerErrorException('Erro ao calcular rota');
     }
-
-    const sortedRoutes = analyzedRoutes
-      .sort((a, b) => {
-        if (a.accessible && !b.accessible) return -1;
-        if (!a.accessible && b.accessible) return 1;
-
-        const getDurationInMinutes = (duration: string): number => {
-          const minutes = Number.parseInt(duration, 10);
-          return Number.isNaN(minutes) ? Number.MAX_SAFE_INTEGER : minutes;
-        };
-
-        return (
-          getDurationInMinutes(a.total_duration) -
-          getDurationInMinutes(b.total_duration)
-        );
-      })
-      .slice(0, 3);
-
-    const bestRoute = sortedRoutes.find((r) => r.accessible) ?? sortedRoutes[0];
-
-    const savedRoute = await this.routesRepository.save(
-      this.routesRepository.create({
-        user_id,
-        origin,
-        destination,
-        transport_type,
-        accompanied: accompanied ?? 'both',
-        accessible: bestRoute.accessible,
-      }),
-    );
-
-    return {
-      route: savedRoute,
-      routes: sortedRoutes,
-    };
   }
 
   async getRouteById(id: number): Promise<Routes> {

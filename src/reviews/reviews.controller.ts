@@ -18,12 +18,7 @@ export class ReviewsController {
 
   @Post()
   async newReview(@Body() body: CreateReviewDto) {
-    return this.reviewsService.newReview(
-      body.user_id,
-      body.place_id,
-      body.accessible,
-      body.comment,
-    );
+    return this.reviewsService.newReview(body);
   }
 
   @Get(':id')
