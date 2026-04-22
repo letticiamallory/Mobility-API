@@ -6,6 +6,12 @@ import {
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 
+export enum DisabilityType {
+  VISUAL = 'visual',
+  WHEELCHAIR = 'wheelchair',
+  REDUCED_MOBILITY = 'reduced_mobility',
+}
+
 @Entity('users')
 export class User {
   @PrimaryGeneratedColumn()
@@ -21,8 +27,8 @@ export class User {
   @Exclude()
   password!: string;
 
-  @Column()
-  disability_type!: string;
+  @Column({ type: 'enum', enum: DisabilityType })
+  disability_type!: DisabilityType;
 
   @CreateDateColumn()
   created_at!: Date;

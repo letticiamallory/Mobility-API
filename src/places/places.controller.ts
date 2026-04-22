@@ -20,15 +20,7 @@ export class PlacesController {
 
   @Post()
   async newPlace(@Body() body: CreatePlaceDto) {
-    return this.placesService.newPlace(
-      body.name,
-      body.type,
-      body.city,
-      body.address,
-      body.accessible,
-      body.disability_type,
-      body.observation,
-    );
+    return this.placesService.newPlace(body);
   }
 
   @Get()
@@ -46,15 +38,6 @@ export class PlacesController {
     @Param('id', ParseIntPipe) id: number,
     @Body() body: UpdatePlaceDto,
   ) {
-    return this.placesService.updateById(
-      id,
-      body.name!,
-      body.type!,
-      body.city!,
-      body.address!,
-      body.accessible!,
-      body.disability_type!,
-      body.observation!,
-    );
+    return this.placesService.updateById(id, body);
   }
 }

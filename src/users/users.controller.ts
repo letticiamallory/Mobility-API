@@ -20,12 +20,7 @@ export class UsersController {
 
   @Post()
   async newUser(@Body() body: CreateUserDto) {
-    return this.usersService.newUser(
-      body.name,
-      body.email,
-      body.password,
-      body.disability_type,
-    );
+    return this.usersService.newUser(body);
   }
 
   @UseGuards(JwtAuthGuard)
