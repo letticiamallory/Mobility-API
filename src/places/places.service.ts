@@ -2,6 +2,8 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Places } from './places.entity';
+import { CreatePlaceDto } from './dto/create-place.dto';
+import { UpdatePlaceDto } from './dto/update-place.dto';
 
 @Injectable()
 export class PlacesService {
@@ -10,24 +12,8 @@ export class PlacesService {
     private placesRepository: Repository<Places>,
   ) {}
 
-  async newPlace(
-    name: string,
-    type: string,
-    city: string,
-    address: string,
-    accessible: boolean,
-    disability_type: string,
-    observation?: string,
-  ): Promise<Places> {
-    const place = this.placesRepository.create({
-      name,
-      type,
-      city,
-      address,
-      accessible,
-      disability_type,
-      observation,
-    });
+  async newPlace(dto: CreatePlaceDto): Promise<Places> {
+    const place = this.placesRepository.create(dto);
     return this.placesRepository.save(place);
   }
 
@@ -45,25 +31,8 @@ export class PlacesService {
     return place;
   }
 
-  async updateById(
-    id: number,
-    name: string,
-    type: string,
-    city: string,
-    address: string,
-    accessible: boolean,
-    disability_type: string,
-    observation?: string,
-  ): Promise<Places> {
-    await this.placesRepository.update(id, {
-      name,
-      type,
-      city,
-      address,
-      accessible,
-      disability_type,
-      observation,
-    });
+  async updateById(id: number, dto: UpdatePlaceDto): Promise<Places> {
+    await this.placesRepository.update(id, dto);
     return this.getById(id);
   }
 }
