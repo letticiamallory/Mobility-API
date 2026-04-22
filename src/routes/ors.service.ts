@@ -82,7 +82,12 @@ export class OrsService {
         instructions: route.segments[0].steps.map(
           (step: OrsStep) => step.instruction,
         ),
-        coordinates: [],
+        coordinates: route.geometry.coordinates.map(
+          ([longitude, latitude]: number[]) => ({
+            latitude,
+            longitude,
+          }),
+        ),
       };
     } catch (error) {
       this.logger.error(`Erro no OrsService: ${(error as Error).message}`);
