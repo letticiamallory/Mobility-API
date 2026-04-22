@@ -93,7 +93,16 @@ export class RoutesService {
       .sort((a, b) => {
         if (a.accessible && !b.accessible) return -1;
         if (!a.accessible && b.accessible) return 1;
-        return a.total_duration.localeCompare(b.total_duration);
+
+        const getDurationInMinutes = (duration: string): number => {
+          const minutes = Number.parseInt(duration, 10);
+          return Number.isNaN(minutes) ? Number.MAX_SAFE_INTEGER : minutes;
+        };
+
+        return (
+          getDurationInMinutes(a.total_duration) -
+          getDurationInMinutes(b.total_duration)
+        );
       })
       .slice(0, 3);
 
