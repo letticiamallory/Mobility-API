@@ -23,6 +23,7 @@ export class RoutesController {
       body.origin,
       body.destination,
       body.transport_type,
+      body.accompanied,
     );
   }
 

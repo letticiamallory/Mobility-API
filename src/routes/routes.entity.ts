@@ -22,6 +22,9 @@ export class Routes {
   @Column()
   transport_type: string;
 
+  @Column({ default: 'both' })
+  accompanied: string;
+
   @Column({ default: true })
   accessible: boolean;
 

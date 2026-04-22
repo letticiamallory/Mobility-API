@@ -25,6 +25,7 @@ export class RoutesService {
     origin: string,
     destination: string,
     transport_type: string,
+    accompanied?: string,
   ): Promise<object> {
     const routeOptions = await this.googleRoutesService.getRouteOptions(
       origin,
@@ -114,6 +115,7 @@ export class RoutesService {
         origin,
         destination,
         transport_type,
+        accompanied: accompanied ?? 'both',
         accessible: bestRoute.accessible,
       }),
     );

@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString, IsInt } from 'class-validator';
+import { IsNotEmpty, IsString, IsInt, IsOptional } from 'class-validator';
 
 export class CheckRouteDto {
   @IsInt()
@@ -15,4 +15,8 @@ export class CheckRouteDto {
   @IsString()
   @IsNotEmpty()
   transport_type!: string;
+
+  @IsOptional()
+  @IsString()
+  accompanied?: string;
 }
