@@ -16,7 +16,7 @@ export class AuthService {
   async login(
     email: string,
     password: string,
-  ): Promise<{ access_token: string }> {
+  ): Promise<{ access_token: string; user_id: number; name: string }> {
     const user = await this.usersRepository.findOne({ where: { email } });
 
     if (!user) throw new UnauthorizedException('Email ou senha inválidos');
@@ -26,6 +26,11 @@ export class AuthService {
       throw new UnauthorizedException('Email ou senha inválidos');
 
     const payload = { sub: user.id, email: user.email };
-    return { access_token: this.jwtService.sign(payload) };
+    const access_token = this.jwtService.sign(payload);
+    const loggedUser = await this.usersRepository.findOne({ where: { email } });
+
+    if (!loggedUser) throw new UnauthorizedException('Email ou senha inválidos');
+
+    return { access_token, user_id: loggedUser.id, name: loggedUser.name };
   }
 }

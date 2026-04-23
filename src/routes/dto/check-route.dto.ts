@@ -1,7 +1,8 @@
-import { IsNotEmpty, IsString, IsInt, IsOptional } from 'class-validator';
+import { IsNotEmpty, IsString, IsInt, IsOptional, Min } from 'class-validator';
 
 export class CheckRouteDto {
   @IsInt()
+  @Min(1)
   user_id!: number;
 
   @IsString()

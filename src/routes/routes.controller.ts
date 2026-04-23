@@ -6,6 +6,7 @@ import {
   Param,
   UseGuards,
   ParseIntPipe,
+  HttpCode,
 } from '@nestjs/common';
 import { RoutesService } from './routes.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -17,6 +18,7 @@ export class RoutesController {
   constructor(private routesService: RoutesService) {}
 
   @Post('check')
+  @HttpCode(200)
   async checkRoute(@Body() body: CheckRouteDto) {
     return this.routesService.checkRoute(
       body.user_id,

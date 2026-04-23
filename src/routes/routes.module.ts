@@ -8,9 +8,10 @@ import { NominatimService } from './nominatim.service';
 import { StreetViewService } from './streetview.service';
 import { GeminiService } from './gemini.service';
 import { GoogleRoutesService } from './google-routes.service';
+import { User } from '../users/users.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Routes])],
+  imports: [TypeOrmModule.forFeature([Routes, User])],
   controllers: [RoutesController],
   providers: [
     RoutesService,
