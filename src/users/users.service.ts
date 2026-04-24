@@ -36,4 +36,40 @@ export class UsersService {
 
     return user;
   }
+
+  async getMeById(id: number): Promise<{
+    id: number;
+    name: string;
+    email: string;
+    disability_type: DisabilityType;
+    accompanied: string;
+  }> {
+    const rows = (await this.usersRepository.query(
+      `SELECT id, name, email, disability_type, accompanied
+       FROM users
+       WHERE id = $1
+       LIMIT 1`,
+      [id],
+    )) as Array<{
+      id: number;
+      name: string;
+      email: string;
+      disability_type: DisabilityType;
+      accompanied: string;
+    }>;
+
+    if (rows.length === 0) {
+      throw new NotFoundException(`Usuário com id ${id} não encontrado`);
+    }
+
+    const user = rows[0];
+
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      disability_type: user.disability_type,
+      accompanied: user.accompanied,
+    };
+  }
 }

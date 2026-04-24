@@ -4,7 +4,7 @@ interface TransitStep {
   html_instructions: string;
   travel_mode: string;
   distance: { text: string };
-  duration: { text: string };
+  duration: { text: string; value: number };
   start_location: { lat: number; lng: number };
   end_location: { lat: number; lng: number };
   transit_details?: {
@@ -19,7 +19,7 @@ interface TransitStep {
 
 interface TransitLeg {
   distance: { text: string };
-  duration: { text: string };
+  duration: { text: string; value: number };
   steps: TransitStep[];
 }
 
@@ -79,11 +79,10 @@ export class GoogleRoutesService {
       }
 
       return data.routes.map((route: TransitRoute, routeIndex: number) => {
-        const leg = route.legs[0];
-
-        const stages = leg.steps.map(
-          (step: TransitStep, stepIndex: number) => ({
-            stage: stepIndex + 1,
+        let stageNumber = 1;
+        const stages = route.legs.flatMap((leg: TransitLeg) =>
+          leg.steps.map((step: TransitStep) => ({
+            stage: stageNumber++,
             mode: step.travel_mode === 'WALKING' ? 'walking' : 'transit',
             instruction: step.html_instructions.replace(/<[^>]*>/g, ''),
             distance: step.distance.text,
@@ -95,13 +94,19 @@ export class GoogleRoutesService {
             accessible: true,
             warning: null,
             street_view_image: null,
-          }),
+          })),
         );
+
+        const totalDurationSeconds = route.legs.reduce(
+          (acc, leg) => acc + leg.duration.value,
+          0,
+        );
+        const totalDurationMinutes = Math.ceil(totalDurationSeconds / 60);
 
         return {
           route_id: routeIndex + 1,
-          total_distance: leg.distance.text,
-          total_duration: leg.duration.text,
+          total_distance: route.legs[0].distance.text,
+          total_duration: `${totalDurationMinutes} min`,
           stages,
         };
       });
