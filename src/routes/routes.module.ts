@@ -9,9 +9,25 @@ import { StreetViewService } from './streetview.service';
 import { GeminiService } from './gemini.service';
 import { GoogleRoutesService } from './google-routes.service';
 import { User } from '../users/users.entity';
+import { ElevationModule } from '../elevation/elevation.module';
+import { WeatherModule } from '../weather/weather.module';
+import { AccessibilityModule } from '../accessibility/accessibility.module';
+import { HereModule } from '../here/here.module';
+import { FoursquareModule } from '../foursquare/foursquare.module';
+import { UberModule } from '../uber/uber.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Routes, User])],
+  imports: [
+    TypeOrmModule.forFeature([Routes, User]),
+    ElevationModule,
+    WeatherModule,
+    AccessibilityModule,
+    HereModule,
+    FoursquareModule,
+    UberModule,
+    NotificationsModule,
+  ],
   controllers: [RoutesController],
   providers: [
     RoutesService,

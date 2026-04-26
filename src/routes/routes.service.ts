@@ -16,6 +16,15 @@ import {
   RouteStage,
 } from './google-routes.service';
 import { User } from '../users/users.entity';
+import { ElevationService } from '../elevation/elevation.service';
+import { WeatherService } from '../weather/weather.service';
+import { OverpassService } from '../accessibility/overpass.service';
+import { WheelmapService } from '../accessibility/wheelmap.service';
+import { FoursquareService } from '../foursquare/foursquare.service';
+import { UberService } from '../uber/uber.service';
+import { HereService } from '../here/here.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NominatimService } from './nominatim.service';
 
 @Injectable()
 export class RoutesService {
@@ -30,6 +39,15 @@ export class RoutesService {
     private streetViewService: StreetViewService,
     private geminiService: GeminiService,
     private googleRoutesService: GoogleRoutesService,
+    private elevationService: ElevationService,
+    private weatherService: WeatherService,
+    private overpassService: OverpassService,
+    private wheelmapService: WheelmapService,
+    private foursquareService: FoursquareService,
+    private uberService: UberService,
+    private hereService: HereService,
+    private notificationsService: NotificationsService,
+    private nominatimService: NominatimService,
   ) {}
 
   async checkRoute(
@@ -67,10 +85,10 @@ export class RoutesService {
         })}`,
       );
 
-      const routeOptions = await this.googleRoutesService.getRouteOptions(
-        origin,
-        destination,
-      );
+      const routeOptions =
+        transport_type === 'walking'
+          ? await this.getWalkingRouteOptionsWithHere(origin, destination)
+          : await this.googleRoutesService.getRouteOptions(origin, destination);
       this.logger.log(
         `[checkRoute] raw route options found: ${routeOptions?.length ?? 0}`,
       );
@@ -89,13 +107,63 @@ export class RoutesService {
         return emptyResponse;
       }
 
-      const analyzedRoutes: (RouteOption & { accessible: boolean })[] = [];
+      const analyzedRoutes: Array<
+        RouteOption & {
+          accessible: boolean;
+          weather: {
+            condition: string | null;
+            temp: number | null;
+            rain: number;
+            alert: string | null;
+          } | null;
+          accessibility_features: {
+            rampas: number;
+            pisotatil: number;
+            banheiros_acessiveis: number;
+          } | null;
+          slope_warning: boolean;
+          nearby_accessible_places: Array<{
+            id: string | number;
+            name: string;
+            lat: number;
+            lng: number;
+            category?: string;
+            wheelchair?: string;
+            distance?: number;
+          }>;
+          uber_estimate: {
+            product: string;
+            estimate: string;
+            duration: number;
+          } | null;
+          uber_deeplink: string | null;
+        }
+      > = [];
 
       for (const option of routeOptions) {
         const analyzedStages: RouteStage[] = [];
 
         for (const stage of option.stages) {
           if (stage.mode === 'walking') {
+            const elevations = await this.elevationService.getElevation([
+              stage.location,
+              stage.end_location,
+            ]);
+            if (elevations.length >= 2) {
+              const slope = this.calculateSlopePercentage(
+                elevations[0].elevation,
+                elevations[1].elevation,
+                stage.location,
+                stage.end_location,
+              );
+              if (slope > 8) {
+                stage.accessible = false;
+                stage.warning =
+                  stage.warning ??
+                  `Trecho com inclinacao aproximada de ${slope.toFixed(1)}% (acima de 8%).`;
+              }
+            }
+
             // Analisa 3 pontos: início, meio e fim
             const pointsToAnalyze = [
               stage.location,
@@ -135,11 +203,72 @@ export class RoutesService {
         }
 
         const routeAccessible = analyzedStages.every((s) => s.accessible);
+        const slope_warning = analyzedStages.some((stage) =>
+          (stage.warning ?? '').includes('acima de 8%'),
+        );
+        const firstPoint = analyzedStages[0]?.location;
+        const weather = firstPoint
+          ? await this.weatherService.getWeatherForRoute(firstPoint.lat, firstPoint.lng)
+          : null;
+        const accessibilityFeatures = firstPoint
+          ? await this.overpassService.getAccessibilityFeatures(
+              firstPoint.lat,
+              firstPoint.lng,
+            )
+          : null;
+        const wheelmapPlaces = firstPoint
+          ? await this.wheelmapService.getNearbyAccessiblePlaces(
+              firstPoint.lat,
+              firstPoint.lng,
+            )
+          : [];
+        const foursquarePlaces = firstPoint
+          ? await this.foursquareService.getNearbyPlaces(firstPoint.lat, firstPoint.lng)
+          : [];
+        const nearbyAccessiblePlaces = [
+          ...wheelmapPlaces,
+          ...foursquarePlaces,
+        ].slice(0, 20);
+        const lastPoint = analyzedStages[analyzedStages.length - 1]?.end_location;
+        const uberEstimates =
+          firstPoint && lastPoint
+            ? await this.uberService.getEstimate(firstPoint, lastPoint)
+            : [];
+        const cheapestUberEstimate =
+          uberEstimates.length > 0
+            ? uberEstimates.reduce((best, current) => {
+                const bestValue = this.extractEstimateValue(best.estimate);
+                const currentValue = this.extractEstimateValue(current.estimate);
+                return currentValue < bestValue ? current : best;
+              })
+            : null;
+        const uberDeeplink =
+          firstPoint && lastPoint
+            ? this.uberService.getDeepLink(firstPoint, lastPoint)
+            : null;
 
         analyzedRoutes.push({
           ...option,
           stages: analyzedStages,
           accessible: routeAccessible,
+          weather,
+          accessibility_features: accessibilityFeatures
+            ? {
+                rampas: accessibilityFeatures.rampas,
+                pisotatil: accessibilityFeatures.pisotatil,
+                banheiros_acessiveis: accessibilityFeatures.banheiros_acessiveis,
+              }
+            : null,
+          slope_warning,
+          nearby_accessible_places: nearbyAccessiblePlaces,
+          uber_estimate: cheapestUberEstimate
+            ? {
+                product: cheapestUberEstimate.product,
+                estimate: cheapestUberEstimate.estimate,
+                duration: cheapestUberEstimate.duration,
+              }
+            : null,
+          uber_deeplink: uberDeeplink,
         });
       }
 
@@ -179,6 +308,26 @@ export class RoutesService {
         route: savedRoute,
         routes: sortedRoutes,
       };
+
+      if (user.fcm_token) {
+        const alertRoute = sortedRoutes.find(
+          (route) => route.slope_warning || (route.weather?.rain ?? 0) > 0,
+        );
+        if (alertRoute) {
+          if (alertRoute.slope_warning) {
+            await this.notificationsService.sendRouteAlert(
+              user.fcm_token,
+              'Trecho com inclinacao acima de 8% identificado na rota.',
+            );
+          }
+          if ((alertRoute.weather?.rain ?? 0) > 0) {
+            await this.notificationsService.sendWeatherAlert(
+              user.fcm_token,
+              alertRoute.weather?.condition ?? 'Chuva',
+            );
+          }
+        }
+      }
       this.logger.log(
         `[checkRoute] final response: ${JSON.stringify({
           routeId: savedRoute.id,
@@ -275,5 +424,117 @@ export class RoutesService {
 
   async findHistoryByUserId(user_id: number): Promise<Routes[]> {
     return this.routesRepository.find({ where: { user_id } });
+  }
+
+  private calculateSlopePercentage(
+    startElevation: number,
+    endElevation: number,
+    start: { lat: number; lng: number },
+    end: { lat: number; lng: number },
+  ): number {
+    const horizontalDistance = this.calculateDistanceMeters(
+      start.lat,
+      start.lng,
+      end.lat,
+      end.lng,
+    );
+    if (horizontalDistance === 0) {
+      return 0;
+    }
+
+    return (Math.abs(endElevation - startElevation) / horizontalDistance) * 100;
+  }
+
+  private calculateDistanceMeters(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+  ): number {
+    const toRadians = (value: number) => (value * Math.PI) / 180;
+    const earthRadius = 6371000;
+    const dLat = toRadians(lat2 - lat1);
+    const dLng = toRadians(lng2 - lng1);
+
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRadians(lat1)) *
+        Math.cos(toRadians(lat2)) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return earthRadius * c;
+  }
+
+  private extractEstimateValue(estimate: string): number {
+    const numbers = estimate.replace(/[^\d,.-]/g, '').replace(',', '.');
+    const value = Number.parseFloat(numbers);
+    return Number.isNaN(value) ? Number.MAX_SAFE_INTEGER : value;
+  }
+
+  private async getWalkingRouteOptionsWithHere(
+    origin: string,
+    destination: string,
+  ): Promise<RouteOption[] | null> {
+    const originCoordinates = await this.nominatimService.getCoordinates(origin);
+    const destinationCoordinates =
+      await this.nominatimService.getCoordinates(destination);
+
+    if (!originCoordinates || !destinationCoordinates) {
+      return this.googleRoutesService.getRouteOptions(origin, destination);
+    }
+
+    const hereRoute = await this.hereService.getAccessibleRoute(
+      { lat: originCoordinates.lat, lng: originCoordinates.lon },
+      { lat: destinationCoordinates.lat, lng: destinationCoordinates.lon },
+    );
+
+    if (!hereRoute) {
+      return this.googleRoutesService.getRouteOptions(origin, destination);
+    }
+
+    const sections = hereRoute.sections ?? [];
+    let stageNumber = 1;
+    const stages: RouteStage[] = sections.map((section: any) => ({
+      stage: stageNumber++,
+      mode: 'walking',
+      instruction:
+        section.actions?.[0]?.instruction ??
+        'Siga a rota de caminhada acessivel sugerida.',
+      distance: `${Math.round(section.summary?.length ?? 0)} m`,
+      duration: `${Math.round((section.summary?.duration ?? 0) / 60)} minutos`,
+      location: {
+        lat: section.departure?.place?.location?.lat ?? originCoordinates.lat,
+        lng: section.departure?.place?.location?.lng ?? originCoordinates.lon,
+      },
+      end_location: {
+        lat: section.arrival?.place?.location?.lat ?? destinationCoordinates.lat,
+        lng: section.arrival?.place?.location?.lng ?? destinationCoordinates.lon,
+      },
+      accessible: true,
+      warning: null,
+      street_view_image: null,
+    }));
+
+    const totalDistanceMeters = sections.reduce(
+      (acc: number, section: any) => acc + (section.summary?.length ?? 0),
+      0,
+    );
+    const totalDurationMinutes = Math.ceil(
+      sections.reduce(
+        (acc: number, section: any) => acc + (section.summary?.duration ?? 0),
+        0,
+      ) / 60,
+    );
+
+    return [
+      {
+        route_id: 1,
+        total_distance: `${(totalDistanceMeters / 1000).toFixed(1)} km`,
+        total_duration: `${totalDurationMinutes} min`,
+        stages,
+      },
+    ];
   }
 }

@@ -34,6 +34,9 @@ export class User {
   @Column({ type: 'varchar', length: 32, default: 'both' })
   accompanied!: string;
 
+  @Column({ type: 'varchar', nullable: true })
+  fcm_token!: string | null;
+
   @CreateDateColumn()
   created_at!: Date;
 }

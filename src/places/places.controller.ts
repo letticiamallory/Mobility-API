@@ -3,10 +3,11 @@ import {
   Controller,
   Get,
   Param,
+  Query,
   Post,
   Put,
   UseGuards,
-  ParseIntPipe,
+  ParseFloatPipe,
 } from '@nestjs/common';
 import { PlacesService } from './places.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -28,16 +29,24 @@ export class PlacesController {
     return this.placesService.findAll();
   }
 
+  @Get('nearby')
+  async getNearby(
+    @Query('lat', ParseFloatPipe) lat: number,
+    @Query('lng', ParseFloatPipe) lng: number,
+  ) {
+    return this.placesService.getNearbyPlaces(lat, lng);
+  }
+
   @Get(':id')
-  async getById(@Param('id', ParseIntPipe) id: number) {
-    return this.placesService.getById(id);
+  async getById(@Param('id') id: string) {
+    return this.placesService.getPlaceDetails(id);
   }
 
   @Put(':id')
   async updateById(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id') id: string,
     @Body() body: UpdatePlaceDto,
   ) {
-    return this.placesService.updateById(id, body);
+    return this.placesService.updateById(Number(id), body);
   }
 }

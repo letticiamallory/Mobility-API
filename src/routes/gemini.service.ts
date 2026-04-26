@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { OverpassService } from '../accessibility/overpass.service';
 
 interface GeminiPart {
   text?: string;
@@ -19,6 +20,8 @@ interface GeminiResponse {
 @Injectable()
 export class GeminiService {
   private readonly logger = new Logger(GeminiService.name);
+
+  constructor(private readonly overpassService: OverpassService) {}
 
   private getGoogleMapsApiKey(): string {
     return process.env.GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_API_KEY ?? '';
@@ -158,6 +161,10 @@ export class GeminiService {
       const lat = Number(latRaw);
       const lng = Number(lngRaw);
       const { images, source } = await this.getBestImages(lat, lng);
+      const accessibilityFeatures = await this.overpassService.getAccessibilityFeatures(
+        lat,
+        lng,
+      );
       this.logger.log(
         `Gemini image source selected: ${source} (${images.length} candidates)`,
       );
@@ -199,7 +206,7 @@ export class GeminiService {
 
       const parts: GeminiPart[] = [
         {
-          text: `${imagePrompt} Você é um especialista em acessibilidade urbana para cadeirantes. Responda APENAS em JSON: {"accessible": true/false, "warning": "descrição objetiva do problema em português ou null"}. INACESSÍVEL (accessible: false) se houver: escadas ou degraus sem rampa alternativa visível, calçada completamente ausente obrigando caminhar na rua, obras/areia/entulho/andaimes bloqueando a passagem, vegetação/postes/lixeiras/mobiliário urbano bloqueando mais de 50% da calçada, calçada muito estreita com menos de 1,2 metro de espaço livre, buracos profundos ou afundamentos graves, rampa com inclinação claramente excessiva, veículos estacionados bloqueando completamente a calçada. ACESSÍVEL (accessible: true) se houver: calçada livre e transitável mesmo que imperfeita, pequenas irregularidades ou pedra portuguesa, ausência de rampa em meio-fio isolada, superfície levemente inclinada ou desgastada, obstáculos pequenos que não bloqueiam a passagem.`,
+          text: `${imagePrompt} Contexto OSM do entorno: ${JSON.stringify(accessibilityFeatures)}. Você é um especialista em acessibilidade urbana para cadeirantes. Responda APENAS em JSON: {"accessible": true/false, "warning": "descrição objetiva do problema em português ou null"}. INACESSÍVEL (accessible: false) se houver: escadas ou degraus sem rampa alternativa visível, calçada completamente ausente obrigando caminhar na rua, obras/areia/entulho/andaimes bloqueando a passagem, vegetação/postes/lixeiras/mobiliário urbano bloqueando mais de 50% da calçada, calçada muito estreita com menos de 1,2 metro de espaço livre, buracos profundos ou afundamentos graves, rampa com inclinação claramente excessiva, veículos estacionados bloqueando completamente a calçada. ACESSÍVEL (accessible: true) se houver: calçada livre e transitável mesmo que imperfeita, pequenas irregularidades ou pedra portuguesa, ausência de rampa em meio-fio isolada, superfície levemente inclinada ou desgastada, obstáculos pequenos que não bloqueiam a passagem.`,
         },
         ...validImageParts,
       ];

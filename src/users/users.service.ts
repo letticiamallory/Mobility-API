@@ -113,6 +113,10 @@ export class UsersService {
     };
   }
 
+  async updateFcmToken(id: number, token: string): Promise<void> {
+    await this.usersRepository.update(id, { fcm_token: token });
+  }
+
   private async usersTableHasAccompaniedColumn(): Promise<boolean> {
     if (this.hasAccompaniedColumn === true) {
       return true;
