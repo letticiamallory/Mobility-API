@@ -30,6 +30,10 @@ export class User {
   @Column({ type: 'enum', enum: DisabilityType })
   disability_type!: DisabilityType;
 
+  /** alone | accompanied | both — matches JSON key `accompanied`. */
+  @Column({ type: 'varchar', length: 32, default: 'both' })
+  accompanied!: string;
+
   @CreateDateColumn()
   created_at!: Date;
 }

@@ -40,18 +40,53 @@ export class RoutesService {
     accompanied?: string,
   ): Promise<object> {
     try {
+      this.logger.log(
+        `[checkRoute] payload received: ${JSON.stringify({
+          user_id,
+          origin,
+          destination,
+          transport_type,
+          accompanied: accompanied ?? null,
+        })}`,
+      );
       const user = await this.usersRepository.findOne({ where: { id: user_id } });
       if (!user) {
         throw new NotFoundException(`Usuário com id ${user_id} não encontrado`);
       }
+      this.logger.log(
+        `[checkRoute] resolved user: ${JSON.stringify({
+          id: user.id,
+          disability_type: user.disability_type ?? null,
+        })}`,
+      );
+      this.logger.log(
+        `[checkRoute] route query params: ${JSON.stringify({
+          origin,
+          destination,
+          transport_type,
+        })}`,
+      );
 
       const routeOptions = await this.googleRoutesService.getRouteOptions(
         origin,
         destination,
       );
+      this.logger.log(
+        `[checkRoute] raw route options found: ${routeOptions?.length ?? 0}`,
+      );
 
       if (!routeOptions || routeOptions.length === 0) {
-        return { message: 'No route found' };
+        const emptyResponse = {
+          route: { origin, destination },
+          routes: [],
+        };
+        this.logger.log(
+          `[checkRoute] final response: ${JSON.stringify({
+            route: emptyResponse.route,
+            routesCount: emptyResponse.routes.length,
+          })}`,
+        );
+        return emptyResponse;
       }
 
       const analyzedRoutes: (RouteOption & { accessible: boolean })[] = [];
@@ -124,6 +159,9 @@ export class RoutesService {
           );
         })
         .slice(0, 3);
+      this.logger.log(
+        `[checkRoute] routes after analysis/sort: ${sortedRoutes.length}`,
+      );
 
       const bestRoute =
         sortedRoutes.find((r) => r.accessible) ?? sortedRoutes[0];
@@ -137,12 +175,24 @@ export class RoutesService {
         accessible: bestRoute.accessible,
       });
 
-      return {
+      const response = {
         route: savedRoute,
         routes: sortedRoutes,
       };
+      this.logger.log(
+        `[checkRoute] final response: ${JSON.stringify({
+          routeId: savedRoute.id,
+          routesCount: response.routes.length,
+          bestRouteAccessible: bestRoute.accessible,
+        })}`,
+      );
+      return response;
     } catch (error) {
       if (error instanceof HttpException) {
+        this.logger.error(
+          `[checkRoute] handled HttpException: ${error.message}`,
+          error.stack,
+        );
         throw error;
       }
 
