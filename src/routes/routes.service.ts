@@ -30,6 +30,7 @@ import { NominatimService } from './nominatim.service';
 export class RoutesService {
   private readonly logger = new Logger(RoutesService.name);
   private hasAccompaniedColumn: boolean | null = null;
+  private static readonly MAX_WALKING_STAGES_TO_ANALYZE = 2;
 
   constructor(
     @InjectRepository(Routes)
@@ -88,7 +89,11 @@ export class RoutesService {
       const routeOptions =
         transport_type === 'walking'
           ? await this.getWalkingRouteOptionsWithHere(origin, destination)
-          : await this.googleRoutesService.getRouteOptions(origin, destination);
+          : await this.googleRoutesService.getRouteOptions(
+              origin,
+              destination,
+              transport_type,
+            );
       this.logger.log(
         `[checkRoute] raw route options found: ${routeOptions?.length ?? 0}`,
       );
@@ -142,9 +147,10 @@ export class RoutesService {
 
       for (const option of routeOptions) {
         const analyzedStages: RouteStage[] = [];
+        let walkingStagesAnalyzed = 0;
 
         for (const stage of option.stages) {
-          if (stage.mode === 'walking') {
+          if (stage.mode === 'walk') {
             const elevations = await this.elevationService.getElevation([
               stage.location,
               stage.end_location,
@@ -164,27 +170,24 @@ export class RoutesService {
               }
             }
 
-            // Analisa 3 pontos: início, meio e fim
-            const pointsToAnalyze = [
-              stage.location,
-              {
+            // Para reduzir latência, limita análise pesada de imagem.
+            if (
+              walkingStagesAnalyzed < RoutesService.MAX_WALKING_STAGES_TO_ANALYZE
+            ) {
+              walkingStagesAnalyzed += 1;
+              const midpoint = {
                 lat: (stage.location.lat + stage.end_location.lat) / 2,
                 lng: (stage.location.lng + stage.end_location.lng) / 2,
-              },
-              stage.end_location,
-            ];
+              };
 
-            for (const point of pointsToAnalyze) {
               const imageUrl = await this.streetViewService.getImage(
-                point.lat,
-                point.lng,
+                midpoint.lat,
+                midpoint.lng,
               );
-
               this.logger.log(`Street View URL: ${imageUrl}`);
 
               if (imageUrl) {
-                const result =
-                  await this.geminiService.analyzeAccessibility(imageUrl);
+                const result = await this.geminiService.analyzeAccessibility(imageUrl);
                 this.logger.log(`Gemini result: ${JSON.stringify(result)}`);
 
                 if (!result.accessible) {
@@ -193,7 +196,6 @@ export class RoutesService {
                     result.warning ??
                     'Possível obstáculo identificado nesse trecho — avalie se consegue passar ou prefira uma alternativa';
                   stage.street_view_image = imageUrl;
-                  break; // Para de analisar os outros pontos se já encontrou problema
                 }
               }
             }
@@ -207,24 +209,15 @@ export class RoutesService {
           (stage.warning ?? '').includes('acima de 8%'),
         );
         const firstPoint = analyzedStages[0]?.location;
-        const weather = firstPoint
-          ? await this.weatherService.getWeatherForRoute(firstPoint.lat, firstPoint.lng)
-          : null;
-        const accessibilityFeatures = firstPoint
-          ? await this.overpassService.getAccessibilityFeatures(
-              firstPoint.lat,
-              firstPoint.lng,
-            )
-          : null;
-        const wheelmapPlaces = firstPoint
-          ? await this.wheelmapService.getNearbyAccessiblePlaces(
-              firstPoint.lat,
-              firstPoint.lng,
-            )
-          : [];
-        const foursquarePlaces = firstPoint
-          ? await this.foursquareService.getNearbyPlaces(firstPoint.lat, firstPoint.lng)
-          : [];
+        const [weather, accessibilityFeatures, wheelmapPlaces, foursquarePlaces] =
+          firstPoint
+            ? await Promise.all([
+                this.safeGetWeather(firstPoint.lat, firstPoint.lng),
+                this.safeGetAccessibilityFeatures(firstPoint.lat, firstPoint.lng),
+                this.safeGetWheelmapPlaces(firstPoint.lat, firstPoint.lng),
+                this.safeGetFoursquarePlaces(firstPoint.lat, firstPoint.lng),
+              ])
+            : [null, null, [], []];
         const nearbyAccessiblePlaces = [
           ...wheelmapPlaces,
           ...foursquarePlaces,
@@ -232,7 +225,7 @@ export class RoutesService {
         const lastPoint = analyzedStages[analyzedStages.length - 1]?.end_location;
         const uberEstimates =
           firstPoint && lastPoint
-            ? await this.uberService.getEstimate(firstPoint, lastPoint)
+            ? await this.safeGetUberEstimates(firstPoint, lastPoint)
             : [];
         const cheapestUberEstimate =
           uberEstimates.length > 0
@@ -315,13 +308,10 @@ export class RoutesService {
         );
         if (alertRoute) {
           if (alertRoute.slope_warning) {
-            await this.notificationsService.sendRouteAlert(
-              user.fcm_token,
-              'Trecho com inclinacao acima de 8% identificado na rota.',
-            );
+            await this.safeSendRouteAlert(user.fcm_token);
           }
           if ((alertRoute.weather?.rain ?? 0) > 0) {
-            await this.notificationsService.sendWeatherAlert(
+            await this.safeSendWeatherAlert(
               user.fcm_token,
               alertRoute.weather?.condition ?? 'Chuva',
             );
@@ -536,5 +526,91 @@ export class RoutesService {
         stages,
       },
     ];
+  }
+
+  private async safeGetWeather(lat: number, lng: number) {
+    try {
+      return await this.weatherService.getWeatherForRoute(lat, lng);
+    } catch (error) {
+      this.logger.warn(
+        `Weather indisponível para (${lat}, ${lng}): ${this.getErrorMessage(error)}`,
+      );
+      return null;
+    }
+  }
+
+  private async safeGetAccessibilityFeatures(lat: number, lng: number) {
+    try {
+      return await this.overpassService.getAccessibilityFeatures(lat, lng);
+    } catch (error) {
+      this.logger.warn(
+        `Overpass indisponível para (${lat}, ${lng}): ${this.getErrorMessage(error)}`,
+      );
+      return null;
+    }
+  }
+
+  private async safeGetWheelmapPlaces(lat: number, lng: number) {
+    try {
+      return await this.wheelmapService.getNearbyAccessiblePlaces(lat, lng);
+    } catch (error) {
+      this.logger.warn(
+        `Wheelmap indisponível para (${lat}, ${lng}): ${this.getErrorMessage(error)}`,
+      );
+      return [];
+    }
+  }
+
+  private async safeGetFoursquarePlaces(lat: number, lng: number) {
+    try {
+      return await this.foursquareService.getNearbyPlaces(lat, lng);
+    } catch (error) {
+      this.logger.warn(
+        `Foursquare indisponível para (${lat}, ${lng}): ${this.getErrorMessage(error)}`,
+      );
+      return [];
+    }
+  }
+
+  private async safeGetUberEstimates(
+    origin: { lat: number; lng: number },
+    destination: { lat: number; lng: number },
+  ) {
+    try {
+      return await this.uberService.getEstimate(origin, destination);
+    } catch (error) {
+      this.logger.warn(
+        `Uber estimate indisponível: ${this.getErrorMessage(error)}`,
+      );
+      return [];
+    }
+  }
+
+  private async safeSendRouteAlert(token: string) {
+    try {
+      await this.notificationsService.sendRouteAlert(
+        token,
+        'Trecho com inclinacao acima de 8% identificado na rota.',
+      );
+    } catch (error) {
+      this.logger.warn(`Falha ao enviar route alert: ${this.getErrorMessage(error)}`);
+    }
+  }
+
+  private async safeSendWeatherAlert(token: string, condition: string) {
+    try {
+      await this.notificationsService.sendWeatherAlert(token, condition);
+    } catch (error) {
+      this.logger.warn(
+        `Falha ao enviar weather alert: ${this.getErrorMessage(error)}`,
+      );
+    }
+  }
+
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return String(error);
   }
 }

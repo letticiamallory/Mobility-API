@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Client } from 'pg';
 
 interface TransitStep {
   html_instructions: string;
@@ -35,6 +36,7 @@ interface GoogleRoutesResponse {
 export interface RouteStage {
   stage: number;
   mode: string;
+  line_code?: string;
   instruction: string;
   distance: string;
   duration: string;
@@ -54,18 +56,69 @@ export interface RouteOption {
   stages: RouteStage[];
 }
 
+interface MocBusLineRow {
+  code: string;
+  name: string;
+  origin: string;
+  destination: string;
+  schedules: string[] | string | null;
+}
+
 @Injectable()
 export class GoogleRoutesService {
   private readonly logger = new Logger(GoogleRoutesService.name);
 
+  private buildSearchTokens(origin: string, destination: string): string[] {
+    const stopWords = new Set(['brasil', 'mg', 'rua', 'avenida', 'av', 'rodovia']);
+    return Array.from(
+      new Set(
+        `${origin} ${destination}`
+          .toLowerCase()
+          .split(/[^a-z0-9à-ÿ]+/i)
+          .map((token) => token.trim())
+          .filter((token) => token.length >= 4 && !stopWords.has(token)),
+      ),
+    );
+  }
+
+  private normalizeSchedules(raw: MocBusLineRow['schedules']): string[] {
+    if (Array.isArray(raw)) {
+      return raw;
+    }
+    if (typeof raw === 'string') {
+      return raw
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+    }
+    return [];
+  }
+
+  private mapStageMode(step: TransitStep): 'walk' | 'bus' | 'subway' {
+    if (step.travel_mode === 'WALKING') {
+      return 'walk';
+    }
+
+    const vehicleType = step.transit_details?.line.vehicle.type;
+    if (vehicleType === 'SUBWAY') {
+      return 'subway';
+    }
+
+    return 'bus';
+  }
+
   async getRouteOptions(
     origin: string,
     destination: string,
+    transportType: string = 'bus',
   ): Promise<RouteOption[] | null> {
     try {
       const apiKey = process.env.GOOGLE_API_KEY ?? '';
+      const departureTime = Math.floor(Date.now() / 1000);
+      const transitMode =
+        transportType === 'subway' ? 'subway' : 'bus|subway|train|tram';
 
-      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&mode=transit&alternatives=true&language=pt-BR&key=${apiKey}`;
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&mode=transit&transit_mode=${encodeURIComponent(transitMode)}&transit_routing_preference=less_walking&departure_time=${departureTime}&alternatives=true&language=pt-BR&key=${apiKey}`;
 
       const response = await fetch(url);
       if (!response.ok) {
@@ -75,46 +128,179 @@ export class GoogleRoutesService {
       const data = (await response.json()) as GoogleRoutesResponse;
 
       if (data.status !== 'OK' || data.routes.length === 0) {
+        this.logger.warn(
+          'Google transit sem resultados; usando fallback do banco MOC BUS.',
+        );
+        return this.getMocBusFallbackRoutes(origin, destination);
+      }
+
+      const mappedTransitRoutes = data.routes.map(
+        (route: TransitRoute, routeIndex: number) => {
+          let stageNumber = 1;
+          const stages = route.legs.flatMap((leg: TransitLeg) =>
+            leg.steps.map((step: TransitStep) => ({
+              stage: stageNumber++,
+              mode: this.mapStageMode(step),
+              line_code: step.transit_details?.line.short_name ?? undefined,
+              instruction: step.html_instructions.replace(/<[^>]*>/g, ''),
+              distance: step.distance.text,
+              duration: step.duration.text,
+              location: step.start_location,
+              end_location: step.end_location,
+              departure: step.transit_details?.departure_stop.name ?? undefined,
+              arrival: step.transit_details?.arrival_stop.name ?? undefined,
+              accessible: true,
+              warning: null,
+              street_view_image: null,
+            })),
+          );
+
+          const totalDurationSeconds = route.legs.reduce(
+            (acc, leg) => acc + leg.duration.value,
+            0,
+          );
+          const totalDurationMinutes = Math.ceil(totalDurationSeconds / 60);
+
+          return {
+            route_id: routeIndex + 1,
+            total_distance: route.legs[0].distance.text,
+            total_duration: `${totalDurationMinutes} min`,
+            stages,
+          };
+        },
+      );
+
+      const hasTransitStages = mappedTransitRoutes.some((route) =>
+        route.stages.some((stage) => stage.mode === 'bus' || stage.mode === 'subway'),
+      );
+
+      if (transportType === 'bus' && !hasTransitStages) {
+        this.logger.warn(
+          'Google transit retornou apenas caminhada; usando fallback do banco MOC BUS.',
+        );
+        return this.getMocBusFallbackRoutes(origin, destination);
+      }
+
+      return mappedTransitRoutes;
+    } catch (error) {
+      this.logger.error(
+        `Erro no GoogleRoutesService: ${(error as Error).message}`,
+      );
+      return this.getMocBusFallbackRoutes(origin, destination);
+    }
+  }
+
+  private async getMocBusFallbackRoutes(
+    origin: string,
+    destination: string,
+  ): Promise<RouteOption[] | null> {
+    const client = new Client({
+      host: process.env.DATABASE_HOST ?? 'localhost',
+      port: Number(process.env.DATABASE_PORT ?? 5432),
+      user: process.env.DATABASE_USER ?? 'postgres',
+      password: process.env.DATABASE_PASSWORD ?? 'postgres123',
+      database: process.env.DATABASE_NAME ?? 'Mobility',
+    });
+
+    try {
+      await client.connect();
+      const rows = (
+        await client.query<MocBusLineRow>(
+          `
+          SELECT code, name, origin, destination, schedules
+          FROM lines
+          ORDER BY code ASC
+          LIMIT 200
+          `,
+        )
+      ).rows;
+
+      if (rows.length === 0) {
         return null;
       }
 
-      return data.routes.map((route: TransitRoute, routeIndex: number) => {
-        let stageNumber = 1;
-        const stages = route.legs.flatMap((leg: TransitLeg) =>
-          leg.steps.map((step: TransitStep) => ({
-            stage: stageNumber++,
-            mode: step.travel_mode === 'WALKING' ? 'walking' : 'transit',
-            instruction: step.html_instructions.replace(/<[^>]*>/g, ''),
-            distance: step.distance.text,
-            duration: step.duration.text,
-            location: step.start_location,
-            end_location: step.end_location,
-            departure: step.transit_details?.departure_stop.name ?? undefined,
-            arrival: step.transit_details?.arrival_stop.name ?? undefined,
+      const tokens = this.buildSearchTokens(origin, destination);
+      const scored = rows
+        .map((line) => {
+          const haystack =
+            `${line.code} ${line.name} ${line.origin} ${line.destination}`.toLowerCase();
+          const score = tokens.reduce(
+            (acc, token) => acc + (haystack.includes(token) ? 1 : 0),
+            0,
+          );
+          return { line, score };
+        })
+        .sort((a, b) => b.score - a.score);
+
+      const bestMatches = scored.filter((item) => item.score > 0).slice(0, 3);
+      const selectedLines =
+        bestMatches.length > 0
+          ? bestMatches.map((item) => item.line)
+          : scored.slice(0, 3).map((item) => item.line);
+
+      return selectedLines.map((line, index) => {
+        const normalizedSchedules = this.normalizeSchedules(line.schedules);
+        const scheduleHint =
+          normalizedSchedules.length > 0
+            ? `Horários: ${normalizedSchedules.slice(0, 3).join(', ')}`
+            : 'Horários indisponíveis';
+
+        const stages: RouteStage[] = [
+          {
+            stage: 1,
+            mode: 'walk',
+            instruction: `Caminhe até a linha ${line.code} (${line.name}).`,
+            distance: '300 m',
+            duration: '5 min',
+            location: { lat: 0, lng: 0 },
+            end_location: { lat: 0, lng: 0 },
             accessible: true,
             warning: null,
             street_view_image: null,
-          })),
-        );
-
-        const totalDurationSeconds = route.legs.reduce(
-          (acc, leg) => acc + leg.duration.value,
-          0,
-        );
-        const totalDurationMinutes = Math.ceil(totalDurationSeconds / 60);
+          },
+          {
+            stage: 2,
+            mode: 'bus',
+            line_code: line.code,
+            instruction: `Embarque na linha ${line.code}: ${line.origin} -> ${line.destination}. ${scheduleHint}`,
+            distance: 'estimado',
+            duration: 'estimado',
+            location: { lat: 0, lng: 0 },
+            end_location: { lat: 0, lng: 0 },
+            departure: line.origin,
+            arrival: line.destination,
+            accessible: true,
+            warning: null,
+            street_view_image: null,
+          },
+          {
+            stage: 3,
+            mode: 'walk',
+            instruction: 'Caminhe da parada final até o destino.',
+            distance: '200 m',
+            duration: '4 min',
+            location: { lat: 0, lng: 0 },
+            end_location: { lat: 0, lng: 0 },
+            accessible: true,
+            warning: null,
+            street_view_image: null,
+          },
+        ];
 
         return {
-          route_id: routeIndex + 1,
-          total_distance: route.legs[0].distance.text,
-          total_duration: `${totalDurationMinutes} min`,
+          route_id: index + 1,
+          total_distance: 'estimado',
+          total_duration: 'estimado',
           stages,
         };
       });
     } catch (error) {
       this.logger.error(
-        `Erro no GoogleRoutesService: ${(error as Error).message}`,
+        `Fallback MOC BUS falhou: ${(error as Error).message}`,
       );
       return null;
+    } finally {
+      await client.end().catch(() => undefined);
     }
   }
 }
