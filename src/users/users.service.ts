@@ -1,10 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
 import { User } from './users.entity';
 import { DisabilityType } from '../users/users.entity';
 import * as bcrypt from 'bcrypt';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateMeDto } from './dto/update-me.dto';
 
 /*O injectable é o que diz pro nest.js que a nossa classe pode ser injetada em outras classes
 caso contrario, nossa controller não conseguiria usar a nossa service. */
@@ -18,16 +19,19 @@ export class UsersService {
   ) {}
 
   async newUser(dto: CreateUserDto): Promise<User> {
+    const confirmPassword = dto.confirm_password ?? dto.confirmPassword;
+    if (!confirmPassword || dto.password !== confirmPassword) {
+      throw new BadRequestException('As senhas não coincidem');
+    }
+    const emailNorm = dto.email.trim().toLowerCase();
     const hashedPassword = await bcrypt.hash(dto.password, 10);
-    const accompanied = dto.accompanied ?? 'both';
 
     if (await this.usersTableHasAccompaniedColumn()) {
       const user = this.usersRepository.create({
         name: dto.name,
-        email: dto.email,
+        email: emailNorm,
         password: hashedPassword,
         disability_type: dto.disability_type as DisabilityType,
-        accompanied,
       });
       return this.usersRepository.save(user);
     }
@@ -37,7 +41,7 @@ export class UsersService {
       `INSERT INTO users (name, email, password, disability_type)
        VALUES ($1, $2, $3, $4)
        RETURNING id, name, email, disability_type, created_at`,
-      [dto.name, dto.email, hashedPassword, dto.disability_type],
+      [dto.name, emailNorm, hashedPassword, dto.disability_type],
     )) as Array<{
       id: number;
       name: string;
@@ -48,7 +52,7 @@ export class UsersService {
 
     return {
       ...rows[0],
-      accompanied,
+      accompanied: null,
     } as User;
   }
 
@@ -115,6 +119,47 @@ export class UsersService {
 
   async updateFcmToken(id: number, token: string): Promise<void> {
     await this.usersRepository.update(id, { fcm_token: token });
+  }
+
+  async updateMeById(
+    id: number,
+    dto: UpdateMeDto,
+  ): Promise<{
+    id: number;
+    name: string;
+    email: string;
+    disability_type: DisabilityType;
+    accompanied: string;
+  }> {
+    const user = await this.usersRepository.findOne({ where: { id } });
+    if (!user) {
+      throw new NotFoundException(`Usuário com id ${id} não encontrado`);
+    }
+
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (name.length < 2) {
+        throw new BadRequestException('Nome deve ter pelo menos 2 caracteres');
+      }
+      user.name = name;
+    }
+
+    if (dto.disability_type !== undefined) {
+      user.disability_type = dto.disability_type as DisabilityType;
+    }
+
+    if (dto.accompanied !== undefined && (await this.usersTableHasAccompaniedColumn())) {
+      user.accompanied = dto.accompanied;
+    }
+
+    const saved = await this.usersRepository.save(user);
+    return {
+      id: saved.id,
+      name: saved.name,
+      email: saved.email,
+      disability_type: saved.disability_type,
+      accompanied: saved.accompanied ?? 'both',
+    };
   }
 
   private async usersTableHasAccompaniedColumn(): Promise<boolean> {
