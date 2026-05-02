@@ -6,7 +6,6 @@ import { PhotoCache } from './cache/photo-cache.entity';
 import { UsersModule } from './users/users.module';
 import { PlacesModule } from './places/places.module';
 import { RoutesModule } from './routes/routes.module';
-import { ReviewsModule } from './reviews/reviews.module';
 import { AuthModule } from './auth/auth.module';
 import { LinesModule } from './lines/lines.module';
 import { StationsModule } from './stations/stations.module';
@@ -39,7 +38,6 @@ import { PhotoCacheModule } from './cache/photo-cache.module';
     UsersModule,
     PlacesModule,
     RoutesModule,
-    ReviewsModule,
     AuthModule,
     LinesModule,
     StationsModule,
