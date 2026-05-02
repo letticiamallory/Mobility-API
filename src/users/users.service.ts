@@ -3,9 +3,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
 import { User } from './users.entity';
 import { DisabilityType } from '../users/users.entity';
-import * as bcrypt from 'bcrypt';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateMeDto } from './dto/update-me.dto';
+import { AuthService } from '../auth/auth.service';
 
 /*O injectable é o que diz pro nest.js que a nossa classe pode ser injetada em outras classes
 caso contrario, nossa controller não conseguiria usar a nossa service. */
@@ -16,44 +16,11 @@ export class UsersService {
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    private authService: AuthService,
   ) {}
 
-  async newUser(dto: CreateUserDto): Promise<User> {
-    const confirmPassword = dto.confirm_password ?? dto.confirmPassword;
-    if (!confirmPassword || dto.password !== confirmPassword) {
-      throw new BadRequestException('As senhas não coincidem');
-    }
-    const emailNorm = dto.email.trim().toLowerCase();
-    const hashedPassword = await bcrypt.hash(dto.password, 10);
-
-    if (await this.usersTableHasAccompaniedColumn()) {
-      const user = this.usersRepository.create({
-        name: dto.name,
-        email: emailNorm,
-        password: hashedPassword,
-        disability_type: dto.disability_type as DisabilityType,
-      });
-      return this.usersRepository.save(user);
-    }
-
-    // Compatibilidade com banco legado sem a coluna accompanied.
-    const rows = (await this.usersRepository.query(
-      `INSERT INTO users (name, email, password, disability_type)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, name, email, disability_type, created_at`,
-      [dto.name, emailNorm, hashedPassword, dto.disability_type],
-    )) as Array<{
-      id: number;
-      name: string;
-      email: string;
-      disability_type: DisabilityType;
-      created_at: Date;
-    }>;
-
-    return {
-      ...rows[0],
-      accompanied: null,
-    } as User;
+  async newUser(dto: CreateUserDto): Promise<{ message: string }> {
+    return this.authService.register(dto);
   }
 
   async getUserById(id: number): Promise<User> {

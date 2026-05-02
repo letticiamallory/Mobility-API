@@ -12,7 +12,7 @@ import { ReviewType } from '../review.entity';
 
 export class CreateReviewDto {
   @IsEnum(ReviewType)
-  type!: string;
+  type!: ReviewType;
 
   @IsOptional()
   @IsNumber()

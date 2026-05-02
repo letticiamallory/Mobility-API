@@ -17,7 +17,13 @@ export class OverpassService {
     `;
 
     const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
-    const { data } = await axios.get(url);
+    const { data } = await axios.get(url, {
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      timeout: 5000,
+    });
     const elements = data.elements ?? [];
 
     return {

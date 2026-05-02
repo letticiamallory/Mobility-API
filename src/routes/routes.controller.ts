@@ -8,7 +8,10 @@ import {
   ParseIntPipe,
   HttpCode,
   Logger,
+  Req,
+  ForbiddenException,
 } from '@nestjs/common';
+import { Request } from 'express';
 import { RoutesService } from './routes.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CheckRouteDto } from './dto/check-route.dto';
@@ -22,7 +25,15 @@ export class RoutesController {
 
   @Post('check')
   @HttpCode(200)
-  async checkRoute(@Body() body: CheckRouteDto) {
+  async checkRoute(
+    @Req() req: Request & { user: { id: number } },
+    @Body() body: CheckRouteDto,
+  ) {
+    if (body.user_id !== req.user.id) {
+      throw new ForbiddenException(
+        'O user_id informado não corresponde ao usuário autenticado.',
+      );
+    }
     this.logger.log(
       `[checkRoute] request body: ${JSON.stringify({
         user_id: body.user_id,
@@ -30,6 +41,9 @@ export class RoutesController {
         destination: body.destination,
         transport_type: body.transport_type,
         accompanied: body.accompanied ?? null,
+        time_filter: body.time_filter ?? null,
+        time_value: body.time_value ?? null,
+        route_preference: body.route_preference ?? null,
       })}`,
     );
     return this.routesService.checkRoute(
@@ -38,6 +52,9 @@ export class RoutesController {
       body.destination,
       body.transport_type,
       body.accompanied,
+      body.time_filter,
+      body.time_value,
+      body.route_preference,
     );
   }
 

@@ -68,6 +68,49 @@ interface MocBusLineRow {
 export class GoogleRoutesService {
   private readonly logger = new Logger(GoogleRoutesService.name);
 
+  private resolveClockToEpoch(clockText: string): number | null {
+    const normalized = clockText.trim();
+    const match = normalized.match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return null;
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+    const target = new Date();
+    target.setHours(hours, minutes, 0, 0);
+    return Math.floor(target.getTime() / 1000);
+  }
+
+  private buildTransitTimeParams(
+    timeFilter?: string,
+    timeValue?: string,
+  ): string {
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    const normalized = (timeFilter ?? 'leave_now').trim().toLowerCase();
+
+    if (normalized === 'leave_plus_15') {
+      return `departure_time=${nowEpoch + 15 * 60}`;
+    }
+
+    if (normalized === 'last_departures_today') {
+      const endOfDay = new Date();
+      endOfDay.setHours(23, 0, 0, 0);
+      return `departure_time=${Math.floor(endOfDay.getTime() / 1000)}`;
+    }
+
+    if (normalized === 'set_departure_time') {
+      const parsed = timeValue ? this.resolveClockToEpoch(timeValue) : null;
+      return `departure_time=${parsed ?? nowEpoch}`;
+    }
+
+    if (normalized === 'set_arrival_time') {
+      const parsed = timeValue ? this.resolveClockToEpoch(timeValue) : null;
+      return `arrival_time=${parsed ?? nowEpoch + 60 * 60}`;
+    }
+
+    return `departure_time=${nowEpoch}`;
+  }
+
   private buildSearchTokens(origin: string, destination: string): string[] {
     const stopWords = new Set(['brasil', 'mg', 'rua', 'avenida', 'av', 'rodovia']);
     return Array.from(
@@ -111,14 +154,21 @@ export class GoogleRoutesService {
     origin: string,
     destination: string,
     transportType: string = 'bus',
+    options?: {
+      timeFilter?: string;
+      timeValue?: string;
+    },
   ): Promise<RouteOption[] | null> {
     try {
       const apiKey = process.env.GOOGLE_API_KEY ?? '';
-      const departureTime = Math.floor(Date.now() / 1000);
       const transitMode =
         transportType === 'subway' ? 'subway' : 'bus|subway|train|tram';
+      const transitTimeParam = this.buildTransitTimeParams(
+        options?.timeFilter,
+        options?.timeValue,
+      );
 
-      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&mode=transit&transit_mode=${encodeURIComponent(transitMode)}&transit_routing_preference=less_walking&departure_time=${departureTime}&alternatives=true&language=pt-BR&key=${apiKey}`;
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&mode=transit&transit_mode=${encodeURIComponent(transitMode)}&transit_routing_preference=less_walking&${transitTimeParam}&alternatives=true&language=pt-BR&key=${apiKey}`;
 
       const response = await fetch(url);
       if (!response.ok) {
@@ -187,6 +237,66 @@ export class GoogleRoutesService {
         `Erro no GoogleRoutesService: ${(error as Error).message}`,
       );
       return this.getMocBusFallbackRoutes(origin, destination);
+    }
+  }
+
+  /** Rotas só a pé (`mode=walking`), alinhado ao que o app envia como `walk`. */
+  async getWalkingRouteOptions(
+    origin: string,
+    destination: string,
+  ): Promise<RouteOption[] | null> {
+    try {
+      const apiKey = process.env.GOOGLE_API_KEY ?? '';
+      if (!apiKey) {
+        this.logger.warn('GOOGLE_API_KEY ausente; direções a pé indisponíveis.');
+        return null;
+      }
+      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&mode=walking&alternatives=true&language=pt-BR&key=${apiKey}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Google Walking API error: ${response.status}`);
+      }
+      const data = (await response.json()) as GoogleRoutesResponse;
+      if (data.status !== 'OK' || data.routes.length === 0) {
+        this.logger.warn('Google walking sem resultados.');
+        return null;
+      }
+      return data.routes.map((route: TransitRoute, routeIndex: number) => {
+        let stageNumber = 1;
+        const stages = route.legs.flatMap((leg: TransitLeg) =>
+          leg.steps.map((step: TransitStep) => ({
+            stage: stageNumber++,
+            mode: 'walk',
+            line_code: undefined,
+            instruction: step.html_instructions.replace(/<[^>]*>/g, ''),
+            distance: step.distance.text,
+            duration: step.duration.text,
+            location: step.start_location,
+            end_location: step.end_location,
+            departure: undefined,
+            arrival: undefined,
+            accessible: true,
+            warning: null,
+            street_view_image: null,
+          })),
+        );
+        const totalDurationSeconds = route.legs.reduce(
+          (acc, leg) => acc + leg.duration.value,
+          0,
+        );
+        const totalDurationMinutes = Math.ceil(totalDurationSeconds / 60);
+        return {
+          route_id: routeIndex + 1,
+          total_distance: route.legs[0].distance.text,
+          total_duration: `${totalDurationMinutes} min`,
+          stages,
+        };
+      });
+    } catch (error) {
+      this.logger.error(
+        `Erro em getWalkingRouteOptions: ${(error as Error).message}`,
+      );
+      return null;
     }
   }
 

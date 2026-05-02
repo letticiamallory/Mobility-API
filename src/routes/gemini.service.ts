@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OverpassService } from '../accessibility/overpass.service';
+import { PhotoCacheService } from '../cache/photo-cache.service';
+import type { RouteStage } from './google-routes.service';
 
 interface GeminiPart {
   text?: string;
@@ -21,10 +23,197 @@ interface GeminiResponse {
 export class GeminiService {
   private readonly logger = new Logger(GeminiService.name);
 
-  constructor(private readonly overpassService: OverpassService) {}
+  constructor(
+    private readonly overpassService: OverpassService,
+    private readonly photoCacheService: PhotoCacheService,
+  ) {}
 
   private getGoogleMapsApiKey(): string {
     return process.env.GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_API_KEY ?? '';
+  }
+
+  /** Static Map (satélite) quando Street View não cobre o trecho. */
+  private buildStaticSatellitePreviewUrl(
+    lat: number,
+    lng: number,
+  ): string | null {
+    const key = this.getGoogleMapsApiKey();
+    if (!key) return null;
+    const u = new URL('https://maps.googleapis.com/maps/api/staticmap');
+    u.searchParams.set('center', `${lat},${lng}`);
+    u.searchParams.set('zoom', '18');
+    u.searchParams.set('size', '400x400');
+    u.searchParams.set('maptype', 'satellite');
+    u.searchParams.set('key', key);
+    return u.toString();
+  }
+
+  /**
+   * Define a URL de preview (Places ou Street View) do stage.
+   * Street View só retorna URL após metadata com status OK.
+   */
+  async resolveStageStreetViewImage(stage: RouteStage): Promise<string | null> {
+    if (stage.mode === 'walk') {
+      return this.resolveWalkSegmentStreetView(stage);
+    }
+    if (stage.mode === 'bus' || stage.mode === 'subway') {
+      return this.resolveTransitStopImage(stage);
+    }
+    return null;
+  }
+
+  private async fetchStreetViewMetadataStatus(
+    lat: number,
+    lng: number,
+    opts?: { heading?: number; pitch?: number; fov?: number },
+  ): Promise<string> {
+    const key = this.getGoogleMapsApiKey();
+    if (!key) return 'REQUEST_DENIED';
+    const url = new URL(
+      'https://maps.googleapis.com/maps/api/streetview/metadata',
+    );
+    url.searchParams.set('location', `${lat},${lng}`);
+    url.searchParams.set('key', key);
+    if (opts?.heading !== undefined) {
+      url.searchParams.set('heading', String(opts.heading));
+    }
+    if (opts?.pitch !== undefined) {
+      url.searchParams.set('pitch', String(opts.pitch));
+    }
+    if (opts?.fov !== undefined) {
+      url.searchParams.set('fov', String(opts.fov));
+    }
+    try {
+      const res = await fetch(url.toString());
+      if (!res.ok) return 'REQUEST_DENIED';
+      const json = (await res.json()) as { status?: string };
+      return json.status ?? 'UNKNOWN_ERROR';
+    } catch {
+      return 'UNKNOWN_ERROR';
+    }
+  }
+
+  private normalizeHeadingDeg(deg: number): number {
+    let h = deg % 360;
+    if (h < 0) h += 360;
+    return h;
+  }
+
+  private async resolveWalkSegmentStreetView(
+    stage: RouteStage,
+  ): Promise<string | null> {
+    const key = this.getGoogleMapsApiKey();
+    if (!key) return null;
+
+    const lat =
+      (stage.location.lat + stage.end_location.lat) / 2;
+    const lng =
+      (stage.location.lng + stage.end_location.lng) / 2;
+
+    const headingRaw =
+      Math.atan2(
+        stage.end_location.lng - stage.location.lng,
+        stage.end_location.lat - stage.location.lat,
+      ) *
+      (180 / Math.PI);
+    const heading = this.normalizeHeadingDeg(headingRaw);
+
+    const metaStatus = await this.fetchStreetViewMetadataStatus(lat, lng, {
+      heading,
+      pitch: 0,
+      fov: 80,
+    });
+    if (metaStatus !== 'OK') {
+      return this.buildStaticSatellitePreviewUrl(lat, lng);
+    }
+
+    const u = new URL('https://maps.googleapis.com/maps/api/streetview');
+    u.searchParams.set('size', '400x200');
+    u.searchParams.set('location', `${lat},${lng}`);
+    u.searchParams.set('heading', String(heading));
+    u.searchParams.set('pitch', '0');
+    u.searchParams.set('fov', '80');
+    u.searchParams.set('key', key);
+    return u.toString();
+  }
+
+  private async findPlacePhotoUrlForStop(
+    stopName: string,
+    lat: number,
+    lng: number,
+  ): Promise<string | null> {
+    const key = this.getGoogleMapsApiKey();
+    if (!key || !stopName.trim()) return null;
+
+    const input = `${stopName.trim()} Montes Claros`;
+    const url = new URL(
+      'https://maps.googleapis.com/maps/api/place/findplacefromtext/json',
+    );
+    url.searchParams.set('input', input);
+    url.searchParams.set('inputtype', 'textquery');
+    url.searchParams.set('fields', 'photos,place_id,geometry');
+    url.searchParams.set('locationbias', `point:${lat},${lng}`);
+    url.searchParams.set('key', key);
+
+    try {
+      const res = await fetch(url.toString());
+      if (!res.ok) return null;
+      const data = (await res.json()) as {
+        status?: string;
+        candidates?: Array<{
+          photos?: Array<{ photo_reference?: string }>;
+        }>;
+      };
+      if (data.status !== 'OK' || !data.candidates?.length) return null;
+      const ref = data.candidates[0].photos?.[0]?.photo_reference;
+      if (!ref) return null;
+
+      const photoUrl = new URL(
+        'https://maps.googleapis.com/maps/api/place/photo',
+      );
+      photoUrl.searchParams.set('maxwidth', '400');
+      photoUrl.searchParams.set('photo_reference', ref);
+      photoUrl.searchParams.set('key', key);
+      return photoUrl.toString();
+    } catch {
+      return null;
+    }
+  }
+
+  private async resolveTransitStopImage(
+    stage: RouteStage,
+  ): Promise<string | null> {
+    const key = this.getGoogleMapsApiKey();
+    if (!key) return null;
+
+    const lat = stage.location.lat;
+    const lng = stage.location.lng;
+    const stopName = (stage.departure ?? '').trim();
+
+    if (stopName) {
+      const placePhoto = await this.findPlacePhotoUrlForStop(
+        stopName,
+        lat,
+        lng,
+      );
+      if (placePhoto) return placePhoto;
+    }
+
+    const metaStatus = await this.fetchStreetViewMetadataStatus(lat, lng, {
+      pitch: -10,
+      fov: 90,
+    });
+    if (metaStatus !== 'OK') {
+      return this.buildStaticSatellitePreviewUrl(lat, lng);
+    }
+
+    const u = new URL('https://maps.googleapis.com/maps/api/streetview');
+    u.searchParams.set('size', '400x200');
+    u.searchParams.set('location', `${lat},${lng}`);
+    u.searchParams.set('pitch', '-10');
+    u.searchParams.set('fov', '90');
+    u.searchParams.set('key', key);
+    return u.toString();
   }
 
   private async getStreetViewImages(lat: number, lng: number): Promise<string[]> {
@@ -84,15 +273,14 @@ export class GeminiService {
     }
   }
 
-  private async getBestImages(
+  private async fetchBestImage(
     lat: number,
     lng: number,
-  ): Promise<{ images: string[]; source: '3dtiles' | 'streetview' }> {
+  ): Promise<{ images: string[]; source: string }> {
     const has3DTiles = await this.check3DTilesAvailability(lat, lng);
 
     if (has3DTiles) {
       const apiKey = this.getGoogleMapsApiKey();
-      // Retorna URL de screenshot do 3D Tiles via Maps Static API com perspectiva
       const images = [
         `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=18&size=640x400&maptype=satellite&key=${apiKey}`,
         `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=17&size=640x400&maptype=satellite&key=${apiKey}`,
@@ -105,14 +293,52 @@ export class GeminiService {
       return { images: streetViewImages, source: 'streetview' };
     }
 
-    // Fallback final: satélite estático
     const apiKey = this.getGoogleMapsApiKey();
     return {
       images: [
         `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=18&size=640x400&maptype=satellite&key=${apiKey}`,
       ],
-      source: 'streetview',
+      source: 'satellite',
     };
+  }
+
+  private async getBestImages(
+    lat: number,
+    lng: number,
+  ): Promise<{ images: string[]; source: string }> {
+    const key = this.photoCacheService.buildStreetViewKey(lat, lng);
+
+    try {
+      const cached = await this.photoCacheService.get(key);
+      if (cached) {
+        this.logger.log(`Photo cache HIT: ${key}`);
+        return { images: [cached], source: 'cache' };
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[Gemini] photo_cache indisponível (get): ${(err as Error).message}`,
+      );
+    }
+
+    const result = await this.fetchBestImage(lat, lng);
+
+    if (result.images.length > 0) {
+      try {
+        await this.photoCacheService.set(
+          key,
+          result.images[0],
+          result.source,
+          30,
+        );
+        this.logger.log(`Photo cache SET: ${key}`);
+      } catch (err) {
+        this.logger.warn(
+          `[Gemini] photo_cache indisponível (set): ${(err as Error).message}`,
+        );
+      }
+    }
+
+    return result;
   }
 
   private async sleep(ms: number): Promise<void> {
@@ -126,7 +352,6 @@ export class GeminiService {
     apiKey: string,
     parts: GeminiPart[],
   ): Promise<GeminiResponse> {
-    console.log('Calling Gemini model:', model);
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       {
@@ -156,23 +381,48 @@ export class GeminiService {
   }> {
     try {
       const apiKey = process.env.GEMINI_API_KEY ?? '';
-      const location = new URL(imageUrl).searchParams.get('location') ?? '';
+      const params = new URL(imageUrl).searchParams;
+      const location =
+        params.get('location') ?? params.get('center') ?? '';
       const [latRaw, lngRaw] = location.split(',');
       const lat = Number(latRaw);
       const lng = Number(lngRaw);
       const { images, source } = await this.getBestImages(lat, lng);
-      const accessibilityFeatures = await this.overpassService.getAccessibilityFeatures(
-        lat,
-        lng,
+      this.logger.log(
+        `[Gemini] imagens encontradas: ${images.length} fonte: ${source}`,
       );
+      let accessibilityFeatures: {
+        rampas: number;
+        pisotatil: number;
+        banheiros_acessiveis: number;
+        calcadas: number;
+      };
+      try {
+        accessibilityFeatures =
+          await this.overpassService.getAccessibilityFeatures(lat, lng);
+      } catch (overpassErr) {
+        const msg =
+          overpassErr instanceof Error ? overpassErr.message : String(overpassErr);
+        this.logger.warn(`[Gemini] Overpass indisponível, seguindo sem OSM: ${msg}`);
+        accessibilityFeatures = {
+          rampas: 0,
+          pisotatil: 0,
+          banheiros_acessiveis: 0,
+          calcadas: 0,
+        };
+      }
       this.logger.log(
         `Gemini image source selected: ${source} (${images.length} candidates)`,
       );
 
-      const imagePrompt =
-        source === '3dtiles'
-          ? 'Analise esta imagem de satélite de alta resolução e avalie a acessibilidade do trecho para pessoas com deficiência. Identifique calçadas, rampas, obstáculos, faixas de pedestre e condições do pavimento.'
-          : 'Analise estas imagens de Street View e avalie a acessibilidade do trecho para pessoas com deficiência. Identifique calçadas, rampas, obstáculos, faixas de pedestre e condições do pavimento.';
+      const useSatellitePrompt =
+        source === '3dtiles' ||
+        source === 'satellite' ||
+        (source === 'cache' && images[0]?.includes('staticmap'));
+
+      const imagePrompt = useSatellitePrompt
+        ? 'Analise esta imagem de satélite de alta resolução e avalie a acessibilidade do trecho para pessoas com deficiência. Identifique calçadas, rampas, obstáculos, faixas de pedestre e condições do pavimento.'
+        : 'Analise estas imagens de Street View e avalie a acessibilidade do trecho para pessoas com deficiência. Identifique calçadas, rampas, obstáculos, faixas de pedestre e condições do pavimento.';
 
       const validImageParts: GeminiPart[] = [];
       for (const url of images) {

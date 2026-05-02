@@ -5,7 +5,6 @@ import { RoutesService } from './routes.service';
 import { Routes } from './routes.entity';
 import { OrsService } from './ors.service';
 import { NominatimService } from './nominatim.service';
-import { StreetViewService } from './streetview.service';
 import { GeminiService } from './gemini.service';
 import { GoogleRoutesService } from './google-routes.service';
 import { User } from '../users/users.entity';
@@ -16,9 +15,12 @@ import { HereModule } from '../here/here.module';
 import { FoursquareModule } from '../foursquare/foursquare.module';
 import { UberModule } from '../uber/uber.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { PhotoCacheModule } from '../cache/photo-cache.module';
+import { OtpService } from './otp.service';
 
 @Module({
   imports: [
+    PhotoCacheModule,
     TypeOrmModule.forFeature([Routes, User]),
     ElevationModule,
     WeatherModule,
@@ -33,9 +35,9 @@ import { NotificationsModule } from '../notifications/notifications.module';
     RoutesService,
     OrsService,
     NominatimService,
-    StreetViewService,
     GeminiService,
     GoogleRoutesService,
+    OtpService,
   ],
 })
 export class RoutesModule {}

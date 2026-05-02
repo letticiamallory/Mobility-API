@@ -1,0 +1,248 @@
+{
+  "route": {
+    "id": 450,
+    "user_id": 39,
+    "origin": "Ibituruna, Montes Claros - MG",
+    "destination": "Montes Claros Shopping, Cidade Nova",
+    "transport_type": "bus",
+    "accessible": true,
+    "created_at": "2026-05-01T01:27:55.427Z",
+    "accompanied": "accompanied"
+  },
+  "routes": [
+    {
+      "route_id": 1,
+      "total_distance": "estimado",
+      "total_duration": "estimado",
+      "stages": [
+        {
+          "stage": 1,
+          "mode": "walk",
+          "instruction": "Caminhe até a linha 2203 (2203 Nova América / Prefeitura via Novo Jaraguá).",
+          "distance": "300 m",
+          "duration": "5 min",
+          "location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "end_location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "accessible": true,
+          "warning": null,
+          "street_view_image": null
+        },
+        {
+          "stage": 2,
+          "mode": "bus",
+          "line_code": "2203",
+          "instruction": "Embarque na linha 2203: Nova América -> Prefeitura via Novo Jaraguá. Horários: {}",
+          "distance": "estimado",
+          "duration": "estimado",
+          "location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "end_location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "departure": "Nova América",
+          "arrival": "Prefeitura via Novo Jaraguá",
+          "accessible": true,
+          "warning": null,
+          "street_view_image": "https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=Ab43m-uCKhoq66-HOuO0MbbOwsY3-K2l4oie75BW0KT6pv5_cSeScVDH0S5XFQJrgHfE8IGd2X5P8tzuHAy1ttM0f40aF-o0FTv0q6TXgV4Ak0Aa4RudkMQc5ddSG17_YaWJzFC6gQdBIb32YL0DpIpHkUQvdpkl8R3d4DSpbw-eLH3FUmvAaV0cpGNrEdONsFA8JZ78onK9xl8CBAfxqSaytYHgiABp_NArQ9P8u0aWIGuFIVYavPx0pYdbZrW7ghTG9KCEsYb34Vp0f_ANf3pMXz8J_QJo0pE55RF_VvwGa6gb_kZN0sdJK3t-4fnsYlRk3yokRTvY2DXiNlMqnI_Wp6ZK_2XYZPLWQqb6L_6ZUobAkRs-fhcKMABPksFhlaO12vfmP7n4lKezw4uvjLZMjqPMf3TPlC7KJg7pp-oEtqPk8yepjt29rridppbe1nKVL0nanvcvgUn0joHrV421gTwfJxFG4ltihQNheMGFu4zhS9aeZ9u1GUE4AcTD39MNZlJ4sJaqLbkl8_-7siUWvLFPk_r4GlioR5zCaQUtN83w1EkDK_AaevtKY6AXIrRW-mTVK44f0vFEPg&key=AIzaSyDMan7VIdABjrAckmjPpMXvarZV6et8DQ8"
+        },
+        {
+          "stage": 3,
+          "mode": "walk",
+          "instruction": "Caminhe da parada final até o destino.",
+          "distance": "200 m",
+          "duration": "4 min",
+          "location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "end_location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "accessible": true,
+          "warning": null,
+          "street_view_image": null
+        }
+      ],
+      "accessible": true,
+      "warning": null,
+      "accompanied_warning": null,
+      "weather": {
+        "condition": "céu limpo",
+        "temp": 27.45,
+        "rain": 0,
+        "alert": null
+      },
+      "accessibility_features": null,
+      "slope_warning": false,
+      "nearby_accessible_places": [],
+      "uber_estimate": null,
+      "uber_deeplink": "uber://?action=setPickup&pickup[latitude]=0&pickup[longitude]=0&dropoff[latitude]=0&dropoff[longitude]=0"
+    },
+    {
+      "route_id": 2,
+      "total_distance": "estimado",
+      "total_duration": "estimado",
+      "stages": [
+        {
+          "stage": 1,
+          "mode": "walk",
+          "instruction": "Caminhe até a linha 5801 (5801 Vila Sion II / Vila Mauricéia via Santa Rita / Ibituruna).",
+          "distance": "300 m",
+          "duration": "5 min",
+          "location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "end_location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "accessible": true,
+          "warning": null,
+          "street_view_image": null
+        },
+        {
+          "stage": 2,
+          "mode": "bus",
+          "line_code": "5801",
+          "instruction": "Embarque na linha 5801: Vila Sion II -> Vila Mauricéia via Santa Rita / Ibituruna. Horários: {}",
+          "distance": "estimado",
+          "duration": "estimado",
+          "location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "end_location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "departure": "Vila Sion II",
+          "arrival": "Vila Mauricéia via Santa Rita / Ibituruna",
+          "accessible": true,
+          "warning": null,
+          "street_view_image": null
+        },
+        {
+          "stage": 3,
+          "mode": "walk",
+          "instruction": "Caminhe da parada final até o destino.",
+          "distance": "200 m",
+          "duration": "4 min",
+          "location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "end_location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "accessible": true,
+          "warning": null,
+          "street_view_image": null
+        }
+      ],
+      "accessible": true,
+      "warning": null,
+      "accompanied_warning": null,
+      "weather": {
+        "condition": "céu limpo",
+        "temp": 27.45,
+        "rain": 0,
+        "alert": null
+      },
+      "accessibility_features": null,
+      "slope_warning": false,
+      "nearby_accessible_places": [],
+      "uber_estimate": null,
+      "uber_deeplink": "uber://?action=setPickup&pickup[latitude]=0&pickup[longitude]=0&dropoff[latitude]=0&dropoff[longitude]=0"
+    },
+    {
+      "route_id": 3,
+      "total_distance": "estimado",
+      "total_duration": "estimado",
+      "stages": [
+        {
+          "stage": 1,
+          "mode": "walk",
+          "instruction": "Caminhe até a linha 5901 (5901 Cintra / Vila Oliveira via Unimontes).",
+          "distance": "300 m",
+          "duration": "5 min",
+          "location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "end_location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "accessible": true,
+          "warning": null,
+          "street_view_image": null
+        },
+        {
+          "stage": 2,
+          "mode": "bus",
+          "line_code": "5901",
+          "instruction": "Embarque na linha 5901: Cintra -> Vila Oliveira via Unimontes. Horários: {}",
+          "distance": "estimado",
+          "duration": "estimado",
+          "location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "end_location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "departure": "Cintra",
+          "arrival": "Vila Oliveira via Unimontes",
+          "accessible": true,
+          "warning": null,
+          "street_view_image": null
+        },
+        {
+          "stage": 3,
+          "mode": "walk",
+          "instruction": "Caminhe da parada final até o destino.",
+          "distance": "200 m",
+          "duration": "4 min",
+          "location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "end_location": {
+            "lat": 0,
+            "lng": 0
+          },
+          "accessible": true,
+          "warning": null,
+          "street_view_image": null
+        }
+      ],
+      "accessible": true,
+      "warning": null,
+      "accompanied_warning": null,
+      "weather": {
+        "condition": "céu limpo",
+        "temp": 27.45,
+        "rain": 0,
+        "alert": null
+      },
+      "accessibility_features": null,
+      "slope_warning": false,
+      "nearby_accessible_places": [],
+      "uber_estimate": null,
+      "uber_deeplink": "uber://?action=setPickup&pickup[latitude]=0&pickup[longitude]=0&dropoff[latitude]=0&dropoff[longitude]=0"
+    }
+  ]
+}

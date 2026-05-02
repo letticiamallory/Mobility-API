@@ -8,7 +8,6 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
 import { Routes } from './routes.entity';
-import { StreetViewService } from './streetview.service';
 import { GeminiService } from './gemini.service';
 import {
   GoogleRoutesService,
@@ -25,19 +24,19 @@ import { UberService } from '../uber/uber.service';
 import { HereService } from '../here/here.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NominatimService } from './nominatim.service';
+import { OtpService } from './otp.service';
 
 @Injectable()
 export class RoutesService {
   private readonly logger = new Logger(RoutesService.name);
   private hasAccompaniedColumn: boolean | null = null;
-  private static readonly MAX_WALKING_STAGES_TO_ANALYZE = 2;
+  private static readonly MAX_WALKING_STAGES_TO_ANALYZE = 5;
 
   constructor(
     @InjectRepository(Routes)
     private routesRepository: Repository<Routes>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
-    private streetViewService: StreetViewService,
     private geminiService: GeminiService,
     private googleRoutesService: GoogleRoutesService,
     private elevationService: ElevationService,
@@ -49,7 +48,58 @@ export class RoutesService {
     private hereService: HereService,
     private notificationsService: NotificationsService,
     private nominatimService: NominatimService,
+    private otpService: OtpService,
   ) {}
+
+  private parseMinutes(value: unknown): number {
+    if (typeof value !== 'string' && typeof value !== 'number') return 0;
+    const text = String(value).trim().toLowerCase();
+    if (!text) return 0;
+    const hours = text.match(/(\d+)\s*h/);
+    const minutes = text.match(/(\d+)\s*min/);
+    const asHours = hours ? Number(hours[1]) * 60 : 0;
+    const asMinutes = minutes ? Number(minutes[1]) : 0;
+    const parsed = asHours + asMinutes;
+    if (parsed > 0) return parsed;
+    const fallback = Number.parseInt(text, 10);
+    return Number.isFinite(fallback) ? fallback : 0;
+  }
+
+  private walkingMinutes(route: RouteOption): number {
+    return (route.stages ?? [])
+      .filter((stage) => `${stage.mode ?? ''}`.toLowerCase() === 'walk')
+      .reduce((acc, stage) => acc + this.parseMinutes(stage.duration), 0);
+  }
+
+  private transferCount(route: RouteOption): number {
+    const transitStages = (route.stages ?? []).filter((stage) => {
+      const mode = `${stage.mode ?? ''}`.toLowerCase();
+      return mode === 'bus' || mode === 'subway' || mode === 'rail';
+    });
+    return Math.max(0, transitStages.length - 1);
+  }
+
+  private applyRoutePreference(
+    routes: RouteOption[],
+    routePreference?: string,
+  ): RouteOption[] {
+    const normalized = `${routePreference ?? 'active'}`.trim().toLowerCase();
+    if (normalized === 'less_transfers') {
+      return [...routes].sort((a, b) => {
+        const byTransfers = this.transferCount(a) - this.transferCount(b);
+        if (byTransfers !== 0) return byTransfers;
+        return this.walkingMinutes(a) - this.walkingMinutes(b);
+      });
+    }
+    if (normalized === 'less_walking') {
+      return [...routes].sort((a, b) => {
+        const byWalking = this.walkingMinutes(a) - this.walkingMinutes(b);
+        if (byWalking !== 0) return byWalking;
+        return this.transferCount(a) - this.transferCount(b);
+      });
+    }
+    return routes;
+  }
 
   async checkRoute(
     user_id: number,
@@ -57,6 +107,9 @@ export class RoutesService {
     destination: string,
     transport_type: string,
     accompanied?: string,
+    time_filter?: string,
+    time_value?: string,
+    route_preference?: string,
   ): Promise<object> {
     try {
       this.logger.log(
@@ -66,6 +119,9 @@ export class RoutesService {
           destination,
           transport_type,
           accompanied: accompanied ?? null,
+          time_filter: time_filter ?? null,
+          time_value: time_value ?? null,
+          route_preference: route_preference ?? null,
         })}`,
       );
       const user = await this.usersRepository.findOne({ where: { id: user_id } });
@@ -83,17 +139,49 @@ export class RoutesService {
           origin,
           destination,
           transport_type,
+          route_preference: route_preference ?? null,
         })}`,
       );
 
-      const routeOptions =
-        transport_type === 'walking'
-          ? await this.getWalkingRouteOptionsWithHere(origin, destination)
-          : await this.googleRoutesService.getRouteOptions(
-              origin,
-              destination,
-              transport_type,
-            );
+      const wantsWalking =
+        transport_type === 'walking' ||
+        transport_type === 'walk' ||
+        transport_type === 'foot';
+
+      let routeOptions: RouteOption[] | null = null;
+      if (wantsWalking) {
+        routeOptions = await this.getWalkingRouteOptionsWithHere(origin, destination);
+      } else {
+        const originCoordinates = await this.nominatimService.getCoordinates(origin);
+        const destinationCoordinates =
+          await this.nominatimService.getCoordinates(destination);
+
+        if (originCoordinates && destinationCoordinates) {
+          const otpRoutes = await this.otpService.planRoute(
+            originCoordinates.lat,
+            originCoordinates.lon,
+            destinationCoordinates.lat,
+            destinationCoordinates.lon,
+            accompanied === 'alone',
+          );
+          if (otpRoutes && otpRoutes.length > 0) {
+            this.logger.log('[checkRoute] OTP retornou rotas, usando resultado OTP');
+            routeOptions = otpRoutes;
+          }
+        }
+
+        if (!routeOptions || routeOptions.length === 0) {
+          routeOptions = await this.googleRoutesService.getRouteOptions(
+            origin,
+            destination,
+            transport_type,
+            {
+              timeFilter: time_filter,
+              timeValue: time_value,
+            },
+          );
+        }
+      }
       this.logger.log(
         `[checkRoute] raw route options found: ${routeOptions?.length ?? 0}`,
       );
@@ -112,9 +200,13 @@ export class RoutesService {
         return emptyResponse;
       }
 
+      routeOptions = this.applyRoutePreference(routeOptions, route_preference);
+
       const analyzedRoutes: Array<
         RouteOption & {
           accessible: boolean;
+          warning: string | null;
+          accompanied_warning: string | null;
           weather: {
             condition: string | null;
             temp: number | null;
@@ -150,6 +242,9 @@ export class RoutesService {
         let walkingStagesAnalyzed = 0;
 
         for (const stage of option.stages) {
+          stage.street_view_image =
+            await this.geminiService.resolveStageStreetViewImage(stage);
+
           if (stage.mode === 'walk') {
             const elevations = await this.elevationService.getElevation([
               stage.location,
@@ -175,15 +270,7 @@ export class RoutesService {
               walkingStagesAnalyzed < RoutesService.MAX_WALKING_STAGES_TO_ANALYZE
             ) {
               walkingStagesAnalyzed += 1;
-              const midpoint = {
-                lat: (stage.location.lat + stage.end_location.lat) / 2,
-                lng: (stage.location.lng + stage.end_location.lng) / 2,
-              };
-
-              const imageUrl = await this.streetViewService.getImage(
-                midpoint.lat,
-                midpoint.lng,
-              );
+              const imageUrl = stage.street_view_image;
               this.logger.log(`Street View URL: ${imageUrl}`);
 
               if (imageUrl) {
@@ -195,7 +282,6 @@ export class RoutesService {
                   stage.warning =
                     result.warning ??
                     'Possível obstáculo identificado nesse trecho — avalie se consegue passar ou prefira uma alternativa';
-                  stage.street_view_image = imageUrl;
                 }
               }
             }
@@ -244,6 +330,8 @@ export class RoutesService {
           ...option,
           stages: analyzedStages,
           accessible: routeAccessible,
+          warning: null,
+          accompanied_warning: null,
           weather,
           accessibility_features: accessibilityFeatures
             ? {
@@ -265,7 +353,7 @@ export class RoutesService {
         });
       }
 
-      const sortedRoutes = analyzedRoutes
+      const sortedByAccessibilityAndDuration = analyzedRoutes
         .sort((a, b) => {
           if (a.accessible && !b.accessible) return -1;
           if (!a.accessible && b.accessible) return 1;
@@ -281,6 +369,38 @@ export class RoutesService {
           );
         })
         .slice(0, 3);
+
+      let sortedRoutes = sortedByAccessibilityAndDuration.map((route) => ({
+        ...route,
+        warning:
+          accompanied !== 'alone' && !route.stages.every((s) => s.accessible)
+            ? 'Este trajeto contém trechos com obstáculos — recomendamos ir acompanhado'
+            : route.warning,
+        accompanied_warning:
+          accompanied === 'alone' && !route.stages.every((s) => s.accessible)
+            ? 'Trecho com obstáculos — pode ser difícil sem acompanhamento'
+            : null,
+      }));
+
+      if (accompanied === 'alone') {
+        const fullyAccessibleRoutes = sortedRoutes.filter((route) =>
+          route.stages.every((s) => s.accessible),
+        );
+        if (fullyAccessibleRoutes.length > 0) {
+          sortedRoutes = fullyAccessibleRoutes;
+        } else if (sortedRoutes.length > 0) {
+          const bestAvailable = sortedRoutes[0];
+          sortedRoutes = [
+            {
+              ...bestAvailable,
+              warning:
+                'Nenhuma rota totalmente acessível encontrada para este trajeto',
+              accompanied_warning:
+                'Trecho com obstáculos — pode ser difícil sem acompanhamento',
+            },
+          ];
+        }
+      }
       this.logger.log(
         `[checkRoute] routes after analysis/sort: ${sortedRoutes.length}`,
       );
@@ -472,7 +592,10 @@ export class RoutesService {
       await this.nominatimService.getCoordinates(destination);
 
     if (!originCoordinates || !destinationCoordinates) {
-      return this.googleRoutesService.getRouteOptions(origin, destination);
+      return this.googleRoutesService.getWalkingRouteOptions(
+        origin,
+        destination,
+      );
     }
 
     const hereRoute = await this.hereService.getAccessibleRoute(
@@ -481,14 +604,17 @@ export class RoutesService {
     );
 
     if (!hereRoute) {
-      return this.googleRoutesService.getRouteOptions(origin, destination);
+      return this.googleRoutesService.getWalkingRouteOptions(
+        origin,
+        destination,
+      );
     }
 
     const sections = hereRoute.sections ?? [];
     let stageNumber = 1;
     const stages: RouteStage[] = sections.map((section: any) => ({
       stage: stageNumber++,
-      mode: 'walking',
+      mode: 'walk',
       instruction:
         section.actions?.[0]?.instruction ??
         'Siga a rota de caminhada acessivel sugerida.',

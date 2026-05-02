@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { join } from 'path';
+import { PhotoCache } from './cache/photo-cache.entity';
 import { UsersModule } from './users/users.module';
 import { PlacesModule } from './places/places.module';
 import { RoutesModule } from './routes/routes.module';
@@ -15,6 +17,7 @@ import { HereModule } from './here/here.module';
 import { FoursquareModule } from './foursquare/foursquare.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { UberModule } from './uber/uber.module';
+import { PhotoCacheModule } from './cache/photo-cache.module';
 
 @Module({
   imports: [
@@ -30,7 +33,9 @@ import { UberModule } from './uber/uber.module';
       database: process.env.DATABASE_NAME ?? 'Mobility',
       autoLoadEntities: true,
       synchronize: false,
+      migrations: [join(__dirname, 'migrations', '*.{ts,js}')],
     }),
+    TypeOrmModule.forFeature([PhotoCache]),
     UsersModule,
     PlacesModule,
     RoutesModule,
@@ -45,6 +50,7 @@ import { UberModule } from './uber/uber.module';
     FoursquareModule,
     NotificationsModule,
     UberModule,
+    PhotoCacheModule,
   ],
 })
 export class AppModule {}

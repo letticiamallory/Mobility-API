@@ -7,10 +7,12 @@ import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { User } from '../users/users.entity';
+import { ResendModule } from '../resend/resend.module';
 
 @Module({
   imports: [
     ConfigModule,
+    ResendModule,
     TypeOrmModule.forFeature([User]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -23,6 +25,6 @@ import { User } from '../users/users.entity';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, JwtAuthGuard],
-  exports: [JwtAuthGuard],
+  exports: [JwtAuthGuard, AuthService],
 })
 export class AuthModule {}

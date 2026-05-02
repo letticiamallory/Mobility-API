@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   Logger,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -9,9 +10,13 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../users/users.entity';
+import { DisabilityType } from '../users/users.entity';
 import * as bcrypt from 'bcrypt';
 import { createHash, randomInt, randomUUID } from 'crypto';
 import { Resend } from 'resend';
+import { GoogleAuthDto } from './google-auth.dto';
+import { ResendService } from '../resend/resend.service';
+import { CreateUserDto } from '../users/dto/create-user.dto';
 
 type ResetState = {
   codeHash: string;
@@ -38,6 +43,7 @@ export class AuthService {
     private usersRepository: Repository<User>,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private resendService: ResendService,
   ) {
     const apiKey = this.configService.get<string>('RESEND_API_KEY');
     this.resendClient = apiKey ? new Resend(apiKey) : null;
@@ -67,9 +73,135 @@ export class AuthService {
     if (!passwordMatch)
       throw new UnauthorizedException('Email ou senha inválidos');
 
+    if (user.email_verified === false) {
+      throw new UnauthorizedException(
+        'Email não verificado. Verifique sua caixa de entrada.',
+      );
+    }
+
     const payload = { sub: user.id, email: user.email };
     const access_token = this.jwtService.sign(payload);
     return { access_token, user_id: user.id, name: user.name };
+  }
+
+  async loginWithGoogle(
+    dto: GoogleAuthDto,
+  ): Promise<{ access_token: string; user_id: number; name: string }> {
+    const normalizedEmail = dto.email.trim().toLowerCase();
+    let user = await this.usersRepository.findOne({ where: { email: normalizedEmail } });
+
+    if (!user) {
+      user = this.usersRepository.create({
+        email: normalizedEmail,
+        name: dto.name.trim(),
+        google_id: dto.googleId,
+        password: await bcrypt.hash(Math.random().toString(36), 10),
+        disability_type: DisabilityType.REDUCED_MOBILITY,
+        email_verified: true,
+      });
+      await this.usersRepository.save(user);
+    } else if (!user.google_id) {
+      user.google_id = dto.googleId;
+      if (user.email_verified === false) {
+        user.email_verified = true;
+        user.verification_code = null;
+        user.verification_code_expires_at = null;
+      }
+      await this.usersRepository.save(user);
+    }
+
+    const payload = { sub: user.id, email: user.email };
+    return {
+      access_token: this.jwtService.sign(payload),
+      user_id: user.id,
+      name: user.name,
+    };
+  }
+
+  async register(dto: CreateUserDto): Promise<{ message: string }> {
+    const confirmPassword = dto.confirm_password ?? dto.confirmPassword;
+    const normalizedEmail = dto.email.trim().toLowerCase();
+
+    const existing = await this.usersRepository
+      .createQueryBuilder('u')
+      .where('LOWER(TRIM(u.email)) = :email', { email: normalizedEmail })
+      .getOne();
+    if (existing) throw new BadRequestException('Email já cadastrado');
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      throw new BadRequestException('Email inválido');
+    }
+
+    if (!confirmPassword || dto.password !== confirmPassword) {
+      throw new BadRequestException('As senhas não coincidem');
+    }
+
+    const verification_code = Math.floor(100000 + Math.random() * 900000).toString();
+    const verification_code_expires_at = new Date(Date.now() + 15 * 60 * 1000);
+
+    const user = this.usersRepository.create({
+      name: dto.name.trim(),
+      email: normalizedEmail,
+      password: await bcrypt.hash(dto.password, 10),
+      disability_type: dto.disability_type as DisabilityType,
+      email_verified: false,
+      verification_code,
+      verification_code_expires_at,
+    });
+    await this.usersRepository.save(user);
+
+    await this.resendService.sendVerificationEmail(
+      user.email,
+      user.verification_code!,
+    );
+
+    return { message: 'Cadastro realizado! Verifique seu email.' };
+  }
+
+  async verifyEmail(email: string, code: string): Promise<{ message: string }> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await this.usersRepository
+      .createQueryBuilder('u')
+      .where('LOWER(TRIM(u.email)) = :email', { email: normalizedEmail })
+      .getOne();
+    if (!user) throw new NotFoundException('Usuário não encontrado');
+    if (user.email_verified) throw new BadRequestException('Email já verificado');
+    if (user.verification_code !== code.trim())
+      throw new BadRequestException('Código inválido');
+    if (
+      !user.verification_code_expires_at ||
+      new Date() > user.verification_code_expires_at
+    ) {
+      throw new BadRequestException('Código expirado');
+    }
+
+    user.email_verified = true;
+    user.verification_code = null;
+    user.verification_code_expires_at = null;
+    await this.usersRepository.save(user);
+
+    return { message: 'Email verificado com sucesso!' };
+  }
+
+  async resendVerificationEmail(email: string): Promise<{ message: string }> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await this.usersRepository
+      .createQueryBuilder('u')
+      .where('LOWER(TRIM(u.email)) = :email', { email: normalizedEmail })
+      .getOne();
+    if (!user) throw new NotFoundException('Usuário não encontrado');
+    if (user.email_verified) throw new BadRequestException('Email já verificado');
+
+    user.verification_code = Math.floor(100000 + Math.random() * 900000).toString();
+    user.verification_code_expires_at = new Date(Date.now() + 15 * 60 * 1000);
+    await this.usersRepository.save(user);
+
+    await this.resendService.sendVerificationEmail(
+      user.email,
+      user.verification_code!,
+    );
+    return { message: 'Código reenviado com sucesso!' };
   }
 
   private hashValue(value: string): string {

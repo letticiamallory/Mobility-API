@@ -30,12 +30,23 @@ export class User {
   @Column({ type: 'enum', enum: DisabilityType })
   disability_type!: DisabilityType;
 
-  /** alone | accompanied | both — matches JSON key `accompanied`. */
-  @Column({ type: 'varchar', length: 32, default: 'both' })
-  accompanied!: string;
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  accompanied!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
   fcm_token!: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  google_id!: string | null;
+
+  @Column({ type: 'boolean', default: false })
+  email_verified!: boolean;
+
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  verification_code!: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  verification_code_expires_at!: Date | null;
 
   @CreateDateColumn()
   created_at!: Date;
