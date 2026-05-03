@@ -23,11 +23,12 @@ export class ResendService {
       return;
     }
 
-    await this.resend.emails.send({
-      from: this.from,
-      to: email,
-      subject: 'Confirme seu email — Mobility',
-      html: `
+    try {
+      await this.resend.emails.send({
+        from: this.from,
+        to: email,
+        subject: 'Confirme seu email — Mobility',
+        html: `
         <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
           <h2 style="color: #0057A8;">Verifique seu email</h2>
           <p>Use o código abaixo para confirmar seu cadastro:</p>
@@ -37,6 +38,13 @@ export class ResendService {
           <p style="color: #666;">O código expira em 15 minutos.</p>
         </div>
       `,
-    });
+      });
+    } catch (err) {
+      this.logger.error(
+        `Resend falhou para ${email}; cadastro já foi gravado — código no log abaixo.`,
+        err instanceof Error ? err.stack : String(err),
+      );
+      this.logger.log(`Verification code for ${email} (fallback após erro Resend): ${code}`);
+    }
   }
 }

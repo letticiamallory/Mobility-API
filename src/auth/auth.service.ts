@@ -37,6 +37,10 @@ export class AuthService {
   private readonly maxAttempts = 5;
   private readonly resendClient: Resend | null;
   private readonly resendFromEmail: string;
+  /** Só para dev/teste: permite login mesmo com email_verified = false. Não use em produção. */
+  private readonly allowUnverifiedLogin: boolean;
+  /** Emails (minúsculos) que podem entrar sem verificação, útil para contas de teste com inbox inválido. */
+  private readonly verificationBypassEmails: Set<string>;
 
   constructor(
     @InjectRepository(User)
@@ -50,6 +54,28 @@ export class AuthService {
     this.resendFromEmail =
       this.configService.get<string>('RESEND_FROM_EMAIL') ??
       'Mobility <onboarding@resend.dev>';
+
+    const relax = (
+      this.configService.get<string>('AUTH_ALLOW_UNVERIFIED_LOGIN') ?? ''
+    )
+      .trim()
+      .toLowerCase();
+    this.allowUnverifiedLogin = ['1', 'true', 'yes', 'on'].includes(relax);
+    const bypassRaw =
+      this.configService.get<string>('AUTH_VERIFICATION_BYPASS_EMAILS') ?? '';
+    this.verificationBypassEmails = new Set(
+      bypassRaw
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    );
+  }
+
+  private canLoginWithoutVerifiedEmail(normalizedEmail: string): boolean {
+    return (
+      this.allowUnverifiedLogin ||
+      this.verificationBypassEmails.has(normalizedEmail)
+    );
   }
 
   async login(
@@ -73,7 +99,10 @@ export class AuthService {
     if (!passwordMatch)
       throw new UnauthorizedException('Email ou senha inválidos');
 
-    if (user.email_verified === false) {
+    if (
+      user.email_verified === false &&
+      !this.canLoginWithoutVerifiedEmail(normalizedEmail)
+    ) {
       throw new UnauthorizedException(
         'Email não verificado. Verifique sua caixa de entrada.',
       );
@@ -151,10 +180,17 @@ export class AuthService {
     });
     await this.usersRepository.save(user);
 
-    await this.resendService.sendVerificationEmail(
-      user.email,
-      user.verification_code!,
-    );
+    try {
+      await this.resendService.sendVerificationEmail(
+        user.email,
+        user.verification_code!,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Exceção ao enviar verificação para ${user.email}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+    }
 
     return { message: 'Cadastro realizado! Verifique seu email.' };
   }
@@ -197,10 +233,17 @@ export class AuthService {
     user.verification_code_expires_at = new Date(Date.now() + 15 * 60 * 1000);
     await this.usersRepository.save(user);
 
-    await this.resendService.sendVerificationEmail(
-      user.email,
-      user.verification_code!,
-    );
+    try {
+      await this.resendService.sendVerificationEmail(
+        user.email,
+        user.verification_code!,
+      );
+    } catch (err) {
+      this.logger.error(
+        `Exceção ao reenviar verificação para ${user.email}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+    }
     return { message: 'Código reenviado com sucesso!' };
   }
 
@@ -221,11 +264,12 @@ export class AuthService {
       return;
     }
 
-    await this.resendClient.emails.send({
-      from: this.resendFromEmail,
-      to: email,
-      subject: 'Código para redefinir sua senha',
-      html: `
+    try {
+      await this.resendClient.emails.send({
+        from: this.resendFromEmail,
+        to: email,
+        subject: 'Código para redefinir sua senha',
+        html: `
         <div style="font-family: Arial, sans-serif; line-height: 1.6;">
           <h2>Recuperação de senha - Mobility</h2>
           <p>Use o código abaixo para confirmar sua identidade:</p>
@@ -233,7 +277,14 @@ export class AuthService {
           <p>Esse código expira em 10 minutos.</p>
         </div>
       `,
-    });
+      });
+    } catch (err) {
+      this.logger.error(
+        `Resend (reset) falhou para ${email}; use o código no log.`,
+        err instanceof Error ? err.message : String(err),
+      );
+      this.logger.log(`Reset code for ${email} (fallback após erro Resend): ${code}`);
+    }
   }
 
   /** Resposta genérica por segurança (sem revelar se o email existe). */
