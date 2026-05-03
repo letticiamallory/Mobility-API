@@ -17,6 +17,7 @@ import { UberModule } from '../uber/uber.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PhotoCacheModule } from '../cache/photo-cache.module';
 import { OtpService } from './otp.service';
+import { WalkAccessibilityEngineService } from './walk-accessibility-engine.service';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { OtpService } from './otp.service';
     GeminiService,
     GoogleRoutesService,
     OtpService,
+    WalkAccessibilityEngineService,
   ],
 })
 export class RoutesModule {}

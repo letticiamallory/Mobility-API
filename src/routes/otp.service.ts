@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { RouteOption, RouteStage } from './google-routes.service';
+import type { LegAccessibilityReport } from './contracts/route-accessibility.contract';
 
 @Injectable()
 export class OtpService {
@@ -50,7 +51,25 @@ export class OtpService {
               lng: Number(leg.to?.lon ?? 0),
             };
 
-            return {
+            const transitAccessibilityReport: LegAccessibilityReport | undefined =
+              wheelchair &&
+              leg.mode !== 'WALK' &&
+              leg.wheelchairAccessible === false
+                ? {
+                    confidence: 'high',
+                    blockers: [
+                      {
+                        type: 'transit_not_wheelchair',
+                        severity: 'medium',
+                        detail:
+                          'OpenTripPlanner indicou este trecho de transporte como não acessível para cadeira de rodas.',
+                      },
+                    ],
+                    sources: ['otp_transit_wheelchair_flag'],
+                  }
+                : undefined;
+
+            const stage: RouteStage = {
               stage: legIndex + 1,
               mode:
                 leg.mode === 'WALK' ? 'walk' : leg.mode === 'BUS' ? 'bus' : 'subway',
@@ -72,6 +91,10 @@ export class OtpService {
               arrival: leg.to?.name ?? undefined,
               street_view_image: null,
             };
+            if (transitAccessibilityReport) {
+              stage.accessibility_report = transitAccessibilityReport;
+            }
+            return stage;
           },
         );
 

@@ -1,6 +1,7 @@
 import {
   Injectable,
   NotFoundException,
+  BadRequestException,
   Logger,
   InternalServerErrorException,
   HttpException,
@@ -14,7 +15,7 @@ import {
   RouteOption,
   RouteStage,
 } from './google-routes.service';
-import { User } from '../users/users.entity';
+import { DisabilityType, User } from '../users/users.entity';
 import { ElevationService } from '../elevation/elevation.service';
 import { WeatherService } from '../weather/weather.service';
 import { OverpassService } from '../accessibility/overpass.service';
@@ -25,12 +26,40 @@ import { HereService } from '../here/here.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NominatimService } from './nominatim.service';
 import { OtpService } from './otp.service';
+import {
+  isWalkStageMode,
+  walkSegmentCoordsOk,
+} from './utils/stage-normalization.util';
+import { parseWalkDistanceToMeters } from './utils/walk-distance-parse.util';
+import {
+  RouteCheckTelemetry,
+  makeRouteCheckRequestId,
+} from './telemetry/route-check-telemetry';
+import { WalkAccessibilityEngineService } from './walk-accessibility-engine.service';
+import {
+  computeAccessibilityScore as computeRouteScore,
+  partitionRoutesByScore,
+  ROUTES_ALONE_MAX,
+  ROUTES_ALONE_MIN_SCORE,
+  ROUTES_COMPANIED_MAX,
+} from './utils/route-scoring.util';
+import { makeDeadline, type Deadline } from './utils/deadline.util';
 
 @Injectable()
 export class RoutesService {
   private readonly logger = new Logger(RoutesService.name);
   private hasAccompaniedColumn: boolean | null = null;
-  private static readonly MAX_WALKING_STAGES_TO_ANALYZE = 5;
+  /**
+   * Trechos walk com análise Gemini por imagem.
+   * Opcional: `ROUTES_MAX_WALK_GEMINI_STAGES` (0–15), padrão **5** (comportamento original).
+   */
+  private static readonly MAX_WALKING_STAGES_TO_ANALYZE = (() => {
+    const n = Number(process.env.ROUTES_MAX_WALK_GEMINI_STAGES ?? '5');
+    if (!Number.isFinite(n) || n < 0) return 5;
+    return Math.min(Math.floor(n), 15);
+  })();
+  /** Limite em linha reta (Haversine) entre origem e destino geocodificados — não chama provedores de rota acima disso. */
+  private static readonly MAX_ROUTE_AIR_DISTANCE_M = 150_000;
 
   constructor(
     @InjectRepository(Routes)
@@ -49,6 +78,7 @@ export class RoutesService {
     private notificationsService: NotificationsService,
     private nominatimService: NominatimService,
     private otpService: OtpService,
+    private walkAccessibilityEngine: WalkAccessibilityEngineService,
   ) {}
 
   private parseMinutes(value: unknown): number {
@@ -67,7 +97,7 @@ export class RoutesService {
 
   private walkingMinutes(route: RouteOption): number {
     return (route.stages ?? [])
-      .filter((stage) => `${stage.mode ?? ''}`.toLowerCase() === 'walk')
+      .filter((stage) => isWalkStageMode(stage.mode))
       .reduce((acc, stage) => acc + this.parseMinutes(stage.duration), 0);
   }
 
@@ -101,6 +131,99 @@ export class RoutesService {
     return routes;
   }
 
+  /**
+   * OTP `wheelchair=true` usa o modo acessível do roteador (quando o servidor OTP está configurado).
+   * `OTP_WHEELCHAIR_ROUTING`: auto (padrão) | always | never | alone | legacy
+   */
+  private otpWheelchairRouting(user: User, accompanied?: string): boolean {
+    const mode = `${process.env.OTP_WHEELCHAIR_ROUTING ?? 'auto'}`
+      .trim()
+      .toLowerCase();
+    if (['always', '1', 'true', 'yes'].includes(mode)) return true;
+    if (['never', '0', 'false', 'no'].includes(mode)) return false;
+    if (mode === 'alone' || mode === 'legacy') return accompanied === 'alone';
+    return (
+      user.disability_type === DisabilityType.WHEELCHAIR ||
+      user.disability_type === DisabilityType.REDUCED_MOBILITY
+    );
+  }
+
+  /**
+   * Aba “Sozinho”: rotas com score ≥ piso, sem bloqueador `high` em qualquer estágio,
+   * sem walk com geometria inválida (`walkSegmentCoordsOk`), e sem flags globais (accessible/slope_warning).
+   * Política completa em `docs/ACCESSIBILITY_POLICY.md`.
+   */
+  private isRouteSuitableForAlone(
+    route: Awaited<ReturnType<RoutesService['enrichSingleRouteOption']>>,
+  ): boolean {
+    if (route.accessible === false) return false;
+    if (route.slope_warning === true) return false;
+    const stages = route.stages ?? [];
+    for (const s of stages) {
+      if (
+        s.accessibility_report?.blockers?.some((b) => b.severity === 'high')
+      ) {
+        return false;
+      }
+    }
+    const walkStages = stages.filter((s) => isWalkStageMode(s.mode));
+    for (const s of walkStages) {
+      if (!walkSegmentCoordsOk(s)) return false;
+    }
+    return computeRouteScore(route) >= ROUTES_ALONE_MIN_SCORE;
+  }
+
+  /** Menor pontuação = trechos a pé “menos acidentados” (ordena aba Acompanhado). */
+  private walkHazardScore(
+    route: Awaited<ReturnType<RoutesService['enrichSingleRouteOption']>>,
+  ): number {
+    let score = 0;
+    if (route.slope_warning) score += 2;
+    for (const s of route.stages ?? []) {
+      if (!isWalkStageMode(s.mode)) continue;
+      if (s.accessible === false) score += 10;
+      if (s.slope_warning) score += 5;
+      const w = `${s.warning ?? ''}`.trim();
+      if (w.length > 0) score += 3;
+    }
+    return score;
+  }
+
+  /**
+   * 0–100 no JSON: **maior = mais acessível**.
+   * Penalidades: rota inacessível, inclinação, trechos a pé com alerta/Gemini, e um pouco de
+   * caminhada total (desempate entre rotas “limpas”).
+   */
+  private computeAccessibilityScore(
+    route: Awaited<ReturnType<RoutesService['enrichSingleRouteOption']>>,
+  ): number {
+    return computeRouteScore(route);
+  }
+
+  private haversineDistanceMeters(
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number,
+  ): number {
+    const R = 6371000;
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  /** Orçamento total de `checkRoute` (server-side). Cliente tem cap de 15s; aqui ~13s para folga de rede. */
+  private static readonly CHECK_ROUTE_DEADLINE_MS = (() => {
+    const raw = `${process.env.ROUTES_CHECK_DEADLINE_MS ?? ''}`.trim();
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n) || n < 1000) return 13_000;
+    return Math.min(n, 60_000);
+  })();
+
   async checkRoute(
     user_id: number,
     origin: string,
@@ -111,9 +234,18 @@ export class RoutesService {
     time_value?: string,
     route_preference?: string,
   ): Promise<object> {
+    const requestId = makeRouteCheckRequestId(user_id);
+    const routeTelemetry = new RouteCheckTelemetry(this.logger, requestId);
+    const deadline = makeDeadline(RoutesService.CHECK_ROUTE_DEADLINE_MS);
     try {
+      routeTelemetry.mark('accepted', {
+        user_id,
+        transport_type,
+        accompanied: accompanied ?? null,
+      });
       this.logger.log(
         `[checkRoute] payload received: ${JSON.stringify({
+          requestId,
           user_id,
           origin,
           destination,
@@ -128,8 +260,10 @@ export class RoutesService {
       if (!user) {
         throw new NotFoundException(`Usuário com id ${user_id} não encontrado`);
       }
+      routeTelemetry.mark('user_loaded');
       this.logger.log(
         `[checkRoute] resolved user: ${JSON.stringify({
+          requestId,
           id: user.id,
           disability_type: user.disability_type ?? null,
         })}`,
@@ -148,14 +282,36 @@ export class RoutesService {
         transport_type === 'walk' ||
         transport_type === 'foot';
 
+      const originCoordinates =
+        await this.nominatimService.getCoordinates(origin);
+      const destinationCoordinates =
+        await this.nominatimService.getCoordinates(
+          destination,
+          originCoordinates ?? undefined,
+        );
+      routeTelemetry.mark('geocode_done', {
+        hasOrigin: !!originCoordinates,
+        hasDestination: !!destinationCoordinates,
+      });
+
+      if (originCoordinates && destinationCoordinates) {
+        const airM = this.haversineDistanceMeters(
+          originCoordinates.lat,
+          originCoordinates.lon,
+          destinationCoordinates.lat,
+          destinationCoordinates.lon,
+        );
+        if (airM > RoutesService.MAX_ROUTE_AIR_DISTANCE_M) {
+          throw new BadRequestException(
+            'A busca de trajetos está limitada a no máximo 150 km entre origem e destino (distância em linha reta).',
+          );
+        }
+      }
+
       let routeOptions: RouteOption[] | null = null;
       if (wantsWalking) {
         routeOptions = await this.getWalkingRouteOptionsWithHere(origin, destination);
       } else {
-        const originCoordinates = await this.nominatimService.getCoordinates(origin);
-        const destinationCoordinates =
-          await this.nominatimService.getCoordinates(destination);
-
         const tfNorm = (time_filter ?? '').trim().toLowerCase();
         const preferOtp =
           !time_filter ||
@@ -168,7 +324,7 @@ export class RoutesService {
             originCoordinates.lon,
             destinationCoordinates.lat,
             destinationCoordinates.lon,
-            accompanied === 'alone',
+            this.otpWheelchairRouting(user, accompanied),
           );
           if (otpRoutes && otpRoutes.length > 0) {
             this.logger.log('[checkRoute] OTP retornou rotas, usando resultado OTP');
@@ -191,14 +347,22 @@ export class RoutesService {
       this.logger.log(
         `[checkRoute] raw route options found: ${routeOptions?.length ?? 0}`,
       );
+      routeTelemetry.mark('routes_fetched', {
+        count: routeOptions?.length ?? 0,
+        wantsWalking,
+      });
 
       if (!routeOptions || routeOptions.length === 0) {
         const emptyResponse = {
           route: { origin, destination },
           routes: [],
+          routes_alone: [],
+          routes_companied: [],
         };
+        routeTelemetry.mark('response_empty_no_raw_routes');
         this.logger.log(
           `[checkRoute] final response: ${JSON.stringify({
+            requestId,
             route: emptyResponse.route,
             routesCount: emptyResponse.routes.length,
           })}`,
@@ -208,242 +372,76 @@ export class RoutesService {
 
       routeOptions = this.applyRoutePreference(routeOptions, route_preference);
 
-      const analyzedRoutes: Array<
-        RouteOption & {
-          accessible: boolean;
-          warning: string | null;
-          accompanied_warning: string | null;
-          weather: {
-            condition: string | null;
-            temp: number | null;
-            rain: number;
-            alert: string | null;
-          } | null;
-          accessibility_features: {
-            rampas: number;
-            pisotatil: number;
-            banheiros_acessiveis: number;
-          } | null;
-          slope_warning: boolean;
-          nearby_accessible_places: Array<{
-            id: string | number;
-            name: string;
-            lat: number;
-            lng: number;
-            category?: string;
-            wheelchair?: string;
-            distance?: number;
-          }>;
-          uber_estimate: {
-            product: string;
-            estimate: string;
-            duration: number;
-          } | null;
-          uber_deeplink: string | null;
-        }
-      > = [];
-
-      for (const option of routeOptions) {
-        const analyzedStages: RouteStage[] = [];
-        let walkingStagesAnalyzed = 0;
-
-        for (const stage of option.stages) {
-          if (stage.mode === 'walk') {
-            const urls = await this.geminiService.resolveWalkStageImageUrls(stage);
-            (stage as RouteStage & { street_view_images?: string[] | null }).street_view_images =
-              urls.length > 0 ? urls : null;
-            stage.street_view_image = urls[0] ?? null;
-          } else if (stage.mode === 'bus' || stage.mode === 'subway') {
-            stage.street_view_image =
-              await this.geminiService.resolveTransitStopPhoto(stage);
-          } else {
-            stage.street_view_image =
-              await this.geminiService.resolveStageStreetViewImage(stage);
-          }
-
-          if (stage.mode === 'walk') {
-            const elevations = await this.elevationService.getElevation([
-              stage.location,
-              stage.end_location,
-            ]);
-            if (elevations.length >= 2) {
-              const slope = this.calculateSlopePercentage(
-                elevations[0].elevation,
-                elevations[1].elevation,
-                stage.location,
-                stage.end_location,
-              );
-              if (slope > 8) {
-                stage.accessible = false;
-                stage.warning =
-                  stage.warning ??
-                  `Trecho com inclinacao aproximada de ${slope.toFixed(1)}% (acima de 8%).`;
-              }
-            }
-
-            // Para reduzir latência, limita análise pesada de imagem (coordenadas do meio do trecho).
-            if (
-              walkingStagesAnalyzed < RoutesService.MAX_WALKING_STAGES_TO_ANALYZE
-            ) {
-              walkingStagesAnalyzed += 1;
-              const midLat =
-                (stage.location.lat + stage.end_location.lat) / 2;
-              const midLng =
-                (stage.location.lng + stage.end_location.lng) / 2;
-              this.logger.log(
-                `Gemini walk segment center: ${midLat},${midLng}`,
-              );
-
-              const result =
-                await this.geminiService.analyzeAccessibilityAt(midLat, midLng);
-              this.logger.log(`Gemini result: ${JSON.stringify(result)}`);
-
-              if (!result.accessible) {
-                stage.accessible = false;
-                stage.warning =
-                  result.warning ??
-                  'Possível obstáculo identificado nesse trecho — avalie se consegue passar ou prefira uma alternativa';
-              }
-            }
-          }
-
-          analyzedStages.push(stage);
-        }
-
-        const routeAccessible = analyzedStages.every((s) => s.accessible);
-        const slope_warning = analyzedStages.some((stage) =>
-          (stage.warning ?? '').includes('acima de 8%'),
-        );
-        const firstPoint = analyzedStages[0]?.location;
-        const [weather, accessibilityFeatures, wheelmapPlaces, foursquarePlaces] =
-          firstPoint
-            ? await Promise.all([
-                this.safeGetWeather(firstPoint.lat, firstPoint.lng),
-                this.safeGetAccessibilityFeatures(firstPoint.lat, firstPoint.lng),
-                this.safeGetWheelmapPlaces(firstPoint.lat, firstPoint.lng),
-                this.safeGetFoursquarePlaces(firstPoint.lat, firstPoint.lng),
-              ])
-            : [null, null, [], []];
-        const nearbyAccessiblePlaces = [
-          ...wheelmapPlaces,
-          ...foursquarePlaces,
-        ].slice(0, 20);
-        const lastPoint = analyzedStages[analyzedStages.length - 1]?.end_location;
-        const uberEstimates =
-          firstPoint && lastPoint
-            ? await this.safeGetUberEstimates(firstPoint, lastPoint)
-            : [];
-        const cheapestUberEstimate =
-          uberEstimates.length > 0
-            ? uberEstimates.reduce((best, current) => {
-                const bestValue = this.extractEstimateValue(best.estimate);
-                const currentValue = this.extractEstimateValue(current.estimate);
-                return currentValue < bestValue ? current : best;
-              })
-            : null;
-        const uberDeeplink =
-          firstPoint && lastPoint
-            ? this.uberService.getDeepLink(firstPoint, lastPoint)
-            : null;
-
-        analyzedRoutes.push({
-          ...option,
-          stages: analyzedStages,
-          accessible: routeAccessible,
-          warning: null,
-          accompanied_warning: null,
-          weather,
-          accessibility_features: accessibilityFeatures
-            ? {
-                rampas: accessibilityFeatures.rampas,
-                pisotatil: accessibilityFeatures.pisotatil,
-                banheiros_acessiveis: accessibilityFeatures.banheiros_acessiveis,
-              }
-            : null,
-          slope_warning,
-          nearby_accessible_places: nearbyAccessiblePlaces,
-          uber_estimate: cheapestUberEstimate
-            ? {
-                product: cheapestUberEstimate.product,
-                estimate: cheapestUberEstimate.estimate,
-                duration: cheapestUberEstimate.duration,
-              }
-            : null,
-          uber_deeplink: uberDeeplink,
-        });
-      }
-
-      /** Mesma lógica de `parseMinutes` — evita `parseInt` no começo da string ("1 h 30 min"). */
-      const rankByDuration = (total_duration: string): number => {
-        const m = this.parseMinutes(total_duration);
-        return m > 0 ? m : Number.MAX_SAFE_INTEGER;
-      };
-
       /**
-       * Sozinho: prioriza rotas mais acessíveis; depois as mais rápidas.
-       * Acompanhado: prioriza viabilidade (menor tempo); depois acessível como desempate —
-       * assim aparecem trajetos “mais diretos” mesmo com trechos que pedem ajuda.
+       * Alternativas em paralelo — cada uma tem sua própria lista de estágios (sem estado compartilhado).
+       * `enrichSingleRouteOption` recebe o deadline para abortar fontes lentas (Gemini, Overpass, ORS).
        */
-      const preferAccessibilityFirst = accompanied === 'alone';
-      const sortedCandidates = [...analyzedRoutes].sort((a, b) => {
-        if (preferAccessibilityFirst) {
-          if (a.accessible && !b.accessible) return -1;
-          if (!a.accessible && b.accessible) return 1;
-          return (
-            rankByDuration(a.total_duration) - rankByDuration(b.total_duration)
-          );
-        }
-        const da = rankByDuration(a.total_duration);
-        const db = rankByDuration(b.total_duration);
-        if (da !== db) return da - db;
-        if (a.accessible && !b.accessible) return -1;
-        if (!a.accessible && b.accessible) return 1;
-        return 0;
+      const analyzedRoutes = await Promise.all(
+        routeOptions.map((option) =>
+          this.enrichSingleRouteOption(option, deadline),
+        ),
+      );
+      routeTelemetry.mark('enrich_done', {
+        alternatives: analyzedRoutes.length,
+        deadline_remaining_ms: deadline.remaining(),
       });
 
-      const searchProfile =
-        accompanied === 'alone' ? ('alone' as const) : ('companied' as const);
+      const partitioned = partitionRoutesByScore(analyzedRoutes, {
+        aloneMax: ROUTES_ALONE_MAX,
+        companiedMax: ROUTES_COMPANIED_MAX,
+      });
 
-      const sortedByAccessibilityAndDuration = sortedCandidates.slice(0, 3);
-
-      let sortedRoutes = sortedByAccessibilityAndDuration.map((route) => ({
+      const routesAlone = partitioned.alone.map((route) => ({
         ...route,
-        search_profile: searchProfile,
-        warning:
-          accompanied !== 'alone' && !route.stages.every((s) => s.accessible)
-            ? 'Este trajeto contém trechos com obstáculos — recomendamos ir acompanhado'
-            : route.warning,
-        accompanied_warning:
-          accompanied === 'alone' && !route.stages.every((s) => s.accessible)
-            ? 'Trecho com obstáculos — pode ser difícil sem acompanhamento'
-            : null,
+        search_profile: 'alone' as const,
+        warning: null,
+        accompanied_warning: null,
       }));
-
-      if (accompanied === 'alone') {
-        const fullyAccessibleRoutes = sortedRoutes.filter((route) =>
-          route.stages.every((s) => s.accessible),
+      const routesCompanied = partitioned.companied.map((route) => {
+        const hasHigh = (route.stages ?? []).some((s) =>
+          s.accessibility_report?.blockers?.some((b) => b.severity === 'high'),
         );
-        if (fullyAccessibleRoutes.length > 0) {
-          sortedRoutes = fullyAccessibleRoutes;
-        } else if (sortedRoutes.length > 0) {
-          const bestAvailable = sortedRoutes[0];
-          sortedRoutes = [
-            {
-              ...bestAvailable,
-              warning:
-                'Nenhuma rota totalmente acessível encontrada para este trajeto',
-              accompanied_warning:
-                'Trecho com obstáculos — pode ser difícil sem acompanhamento',
-            },
-          ];
-        }
-      }
-      this.logger.log(
-        `[checkRoute] routes after analysis/sort: ${sortedRoutes.length}`,
-      );
+        const messy = !route.stages.every((s) => s.accessible);
+        const hazard = this.walkHazardScore(route) > 0 || route.slope_warning;
+        const attention = hasHigh || messy || hazard;
+        return {
+          ...route,
+          search_profile: 'companied' as const,
+          warning: attention
+            ? 'Este trajeto contém trechos com obstáculos — atenção ao deslocamento com apoio.'
+            : route.warning,
+          accompanied_warning: null,
+        };
+      });
 
-      const bestRoute =
-        sortedRoutes.find((r) => r.accessible) ?? sortedRoutes[0];
+      const searchProfileMeta =
+        accompanied === 'alone' ? ('alone' as const) : ('companied' as const);
+      const legacyRoutes =
+        accompanied === 'alone' ? routesAlone : routesCompanied;
+
+      this.logger.log(
+        `[checkRoute] partition alone=${routesAlone.length} companied=${routesCompanied.length}`,
+      );
+      routeTelemetry.mark('partition_done', {
+        alone: routesAlone.length,
+        companied: routesCompanied.length,
+      });
+
+      if (routesAlone.length === 0 && routesCompanied.length === 0) {
+        routeTelemetry.mark('response_empty_after_partition');
+        this.logger.warn(
+          '[checkRoute] lista vazia após análise — retornando sem persistir.',
+        );
+        return {
+          route: { origin, destination },
+          routes: [],
+          routes_alone: [],
+          routes_companied: [],
+          search_profile: searchProfileMeta,
+        };
+      }
+
+      const bestRoute = routesAlone[0] ?? routesCompanied[0];
 
       const savedRoute = await this.saveRoute({
         user_id,
@@ -454,14 +452,18 @@ export class RoutesService {
         accessible: bestRoute.accessible,
       });
 
+      const degraded = deadline.expired();
       const response = {
         route: savedRoute,
-        routes: sortedRoutes,
-        search_profile: searchProfile,
+        routes: legacyRoutes,
+        routes_alone: routesAlone,
+        routes_companied: routesCompanied,
+        search_profile: searchProfileMeta,
+        ...(degraded ? { degraded: true, degraded_reason: 'time_budget' } : {}),
       };
 
       if (user.fcm_token) {
-        const alertRoute = sortedRoutes.find(
+        const alertRoute = [...routesAlone, ...routesCompanied].find(
           (route) => route.slope_warning || (route.weather?.rain ?? 0) > 0,
         );
         if (alertRoute) {
@@ -476,8 +478,13 @@ export class RoutesService {
           }
         }
       }
+      routeTelemetry.mark('success', {
+        routeId: savedRoute.id,
+        legacyRoutesCount: response.routes.length,
+      });
       this.logger.log(
         `[checkRoute] final response: ${JSON.stringify({
+          requestId,
           routeId: savedRoute.id,
           routesCount: response.routes.length,
           bestRouteAccessible: bestRoute.accessible,
@@ -487,7 +494,10 @@ export class RoutesService {
     } catch (error) {
       if (error instanceof HttpException) {
         this.logger.error(
-          `[checkRoute] handled HttpException: ${error.message}`,
+          `[checkRoute] handled HttpException: ${JSON.stringify({
+            requestId,
+            message: error.message,
+          })}`,
           error.stack,
         );
         throw error;
@@ -495,9 +505,251 @@ export class RoutesService {
 
       const message = error instanceof Error ? error.message : String(error);
       const stack = error instanceof Error ? error.stack : undefined;
-      this.logger.error(`Erro ao calcular rota: ${message}`, stack);
+      this.logger.error(
+        `Erro ao calcular rota: ${JSON.stringify({ requestId, message })}`,
+        stack,
+      );
       throw new InternalServerErrorException('Erro ao calcular rota');
+    } finally {
+      deadline.cancel();
     }
+  }
+
+  /**
+   * Enriquece uma alternativa em paralelo, com orçamento cooperativo (`deadline`).
+   *  - Walks: imagens + elevação simultâneas, depois motor estrutural; Gemini de visão só
+   *    nos walks "quentes" (com bloqueador médio/alto, slope ou warning) priorizados.
+   *  - Não-walks: fotos best-effort.
+   *  - POIs/Uber/clima: paralelo no fim, com fallback null se faltar tempo.
+   */
+  private async enrichSingleRouteOption(
+    option: RouteOption,
+    deadline?: Deadline,
+  ) {
+    const enrichWalk = async (stage: RouteStage) => {
+      const walkCoordsOk = walkSegmentCoordsOk(stage);
+      const imagesPromise = (async () => {
+        try {
+          const urls = await this.geminiService.resolveWalkStageImageUrls(stage);
+          (stage as RouteStage & { street_view_images?: string[] | null }).street_view_images =
+            urls.length > 0 ? urls : null;
+          stage.street_view_image = urls[0] ?? null;
+        } catch (imgErr) {
+          this.logger.warn(
+            `[checkRoute] imagens walk ignoradas: ${(imgErr as Error).message}`,
+          );
+        }
+      })();
+      const elevationPromise = walkCoordsOk
+        ? this.elevationService
+            .getElevation([stage.location, stage.end_location])
+            .catch(() => [] as Array<{ elevation: number; accessible: boolean; lat: number; lng: number }>)
+        : Promise.resolve(
+            [] as Array<{ elevation: number; accessible: boolean; lat: number; lng: number }>,
+          );
+
+      const imagesGuarded = deadline
+        ? deadline.race(imagesPromise, { fallback: undefined, label: 'walk_images', perCallMs: 6_000 })
+        : imagesPromise;
+      const elevationGuarded = deadline
+        ? deadline.race(elevationPromise, { fallback: [], label: 'elevation', perCallMs: 4_000 })
+        : elevationPromise;
+      const [, elevations] = await Promise.all([imagesGuarded, elevationGuarded]);
+
+      let slopePercent: number | null = null;
+      if (walkCoordsOk && elevations.length >= 2) {
+        const slope = this.calculateSlopePercentage(
+          elevations[0].elevation,
+          elevations[1].elevation,
+          stage.location,
+          stage.end_location,
+        );
+        slopePercent = slope;
+        if (slope > 8) {
+          stage.accessible = false;
+          stage.slope_warning = true;
+          stage.warning =
+            stage.warning ??
+            `Trecho com inclinacao aproximada de ${slope.toFixed(1)}% (acima de 8%).`;
+        }
+      }
+
+      try {
+        const structuralPromise = this.walkAccessibilityEngine.analyzeWalkLeg({
+          stage,
+          slopePercent,
+          declaredWalkMeters: parseWalkDistanceToMeters(stage.distance),
+        });
+        const structuralReport = deadline
+          ? await deadline.race(structuralPromise, {
+              fallback: { confidence: 'low', blockers: [], sources: ['structural_skipped'] },
+              label: 'walk_structural',
+              perCallMs: 7_000,
+            })
+          : await structuralPromise;
+        stage.accessibility_report = structuralReport;
+        this.walkAccessibilityEngine.applyStructuralFollowUps(stage, structuralReport);
+      } catch (structErr) {
+        this.logger.warn(
+          `[checkRoute] motor estrutural ignorado: ${(structErr as Error).message}`,
+        );
+      }
+
+      return { stage, walkCoordsOk };
+    };
+
+    const enrichTransitImages = async (stage: RouteStage) => {
+      try {
+        const promise =
+          stage.mode === 'bus' || stage.mode === 'subway'
+            ? this.geminiService.resolveTransitStopPhoto(stage)
+            : this.geminiService.resolveStageStreetViewImage(stage);
+        const url = deadline
+          ? await deadline.race(promise, { fallback: null, label: 'transit_image', perCallMs: 4_000 })
+          : await promise;
+        stage.street_view_image = url ?? null;
+      } catch (imgErr) {
+        this.logger.warn(
+          `[checkRoute] imagem transit ignorada: ${(imgErr as Error).message}`,
+        );
+      }
+      return stage;
+    };
+
+    /** Estágio "quente" merece análise de visão Gemini. */
+    const isHotWalk = (stage: RouteStage): boolean => {
+      if (stage.accessible === false) return true;
+      if (stage.slope_warning === true) return true;
+      const w = `${stage.warning ?? ''}`.trim();
+      if (w.length > 0) return true;
+      const blockers = stage.accessibility_report?.blockers ?? [];
+      return blockers.some((b) => b.severity === 'medium' || b.severity === 'high');
+    };
+
+    const stageEnrichments: Promise<unknown>[] = [];
+    const walkResults: Array<{ stage: RouteStage; walkCoordsOk: boolean }> = [];
+    for (const stage of option.stages) {
+      if (isWalkStageMode(stage.mode)) {
+        stageEnrichments.push(
+          enrichWalk(stage).then((r) => walkResults.push(r)),
+        );
+      } else {
+        stageEnrichments.push(enrichTransitImages(stage));
+      }
+    }
+    await Promise.all(stageEnrichments);
+
+    /** Análise visual Gemini: priorizar walks quentes; respeitar limite global e orçamento. */
+    const hotWalks = walkResults
+      .filter((r) => r.walkCoordsOk && isHotWalk(r.stage))
+      .map((r) => r.stage);
+    const coldWalks = walkResults
+      .filter((r) => r.walkCoordsOk && !isHotWalk(r.stage))
+      .map((r) => r.stage);
+    const orderedWalks = [...hotWalks, ...coldWalks].slice(
+      0,
+      RoutesService.MAX_WALKING_STAGES_TO_ANALYZE,
+    );
+
+    await Promise.all(
+      orderedWalks.map(async (stage) => {
+        if (deadline?.expired()) return;
+        const midLat = (stage.location.lat + stage.end_location.lat) / 2;
+        const midLng = (stage.location.lng + stage.end_location.lng) / 2;
+        try {
+          const promise = this.geminiService.analyzeAccessibilityAt(midLat, midLng);
+          const result = deadline
+            ? await deadline.race(promise, {
+                fallback: { accessible: true, warning: null } as Awaited<typeof promise>,
+                label: 'gemini_vision',
+                perCallMs: 6_000,
+              })
+            : await promise;
+          if (!result.accessible) {
+            stage.accessible = false;
+            stage.warning =
+              result.warning ??
+              'Possível obstáculo identificado nesse trecho — avalie se consegue passar ou prefira uma alternativa';
+          }
+        } catch (gemErr) {
+          this.logger.warn(
+            `[checkRoute] Gemini walk skip: ${(gemErr as Error).message}`,
+          );
+        }
+      }),
+    );
+
+    const analyzedStages: RouteStage[] = option.stages;
+
+    const routeAccessible = analyzedStages.every((s) => s.accessible);
+    const slope_warning = analyzedStages.some((stage) =>
+      (stage.warning ?? '').includes('acima de 8%'),
+    );
+    const firstPoint = analyzedStages[0]?.location;
+    const guarded = <T>(p: Promise<T>, label: string, fallback: T): Promise<T> =>
+      deadline
+        ? deadline.race(p, { fallback, label, perCallMs: 4_000 })
+        : p.catch(() => fallback);
+    const [weather, accessibilityFeatures, wheelmapPlaces, foursquarePlaces] =
+      firstPoint
+        ? await Promise.all([
+            guarded(this.safeGetWeather(firstPoint.lat, firstPoint.lng), 'weather', null),
+            guarded(
+              this.safeGetAccessibilityFeatures(firstPoint.lat, firstPoint.lng),
+              'osm_features',
+              null,
+            ),
+            guarded(this.safeGetWheelmapPlaces(firstPoint.lat, firstPoint.lng), 'wheelmap', []),
+            guarded(this.safeGetFoursquarePlaces(firstPoint.lat, firstPoint.lng), 'foursquare', []),
+          ])
+        : [null, null, [], []];
+    const nearbyAccessiblePlaces = [
+      ...wheelmapPlaces,
+      ...foursquarePlaces,
+    ].slice(0, 20);
+    const lastPoint = analyzedStages[analyzedStages.length - 1]?.end_location;
+    const uberEstimates =
+      firstPoint && lastPoint
+        ? await guarded(this.safeGetUberEstimates(firstPoint, lastPoint), 'uber', [])
+        : [];
+    const cheapestUberEstimate =
+      uberEstimates.length > 0
+        ? uberEstimates.reduce((best, current) => {
+            const bestValue = this.extractEstimateValue(best.estimate);
+            const currentValue = this.extractEstimateValue(current.estimate);
+            return currentValue < bestValue ? current : best;
+          })
+        : null;
+    const uberDeeplink =
+      firstPoint && lastPoint
+        ? this.uberService.getDeepLink(firstPoint, lastPoint)
+        : null;
+
+    return {
+      ...option,
+      stages: analyzedStages,
+      accessible: routeAccessible,
+      warning: null,
+      accompanied_warning: null,
+      weather,
+      accessibility_features: accessibilityFeatures
+        ? {
+            rampas: accessibilityFeatures.rampas,
+            pisotatil: accessibilityFeatures.pisotatil,
+            banheiros_acessiveis: accessibilityFeatures.banheiros_acessiveis,
+          }
+        : null,
+      slope_warning,
+      nearby_accessible_places: nearbyAccessiblePlaces,
+      uber_estimate: cheapestUberEstimate
+        ? {
+            product: cheapestUberEstimate.product,
+            estimate: cheapestUberEstimate.estimate,
+            duration: cheapestUberEstimate.duration,
+          }
+        : null,
+      uber_deeplink: uberDeeplink,
+    };
   }
 
   private async saveRoute(data: {
@@ -630,7 +882,10 @@ export class RoutesService {
   ): Promise<RouteOption[] | null> {
     const originCoordinates = await this.nominatimService.getCoordinates(origin);
     const destinationCoordinates =
-      await this.nominatimService.getCoordinates(destination);
+      await this.nominatimService.getCoordinates(
+        destination,
+        originCoordinates ?? undefined,
+      );
 
     if (!originCoordinates || !destinationCoordinates) {
       return this.googleRoutesService.getWalkingRouteOptions(

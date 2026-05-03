@@ -18,6 +18,7 @@ function createRoutesService(): RoutesService {
     noop,
     noop,
     noop,
+    noop,
   );
 }
 
@@ -88,6 +89,96 @@ describe('RoutesService — lógica de acessibilidade', () => {
 
     it('deve retornar todas as rotas quando accompanied === accompanied', () => {
       expect(mockRoutes).toHaveLength(2);
+    });
+  });
+
+  describe('isRouteSuitableForAlone (Fase 4 — score-based)', () => {
+    const baseRoute = {
+      accessible: true,
+      slope_warning: false,
+      stages: [] as any[],
+    };
+
+    it('exclui rota com bloqueador HIGH em qualquer estágio (degraus mapeados)', () => {
+      const route = {
+        ...baseRoute,
+        stages: [
+          {
+            mode: 'walk',
+            accessible: true,
+            warning: null,
+            location: { lat: -23.55, lng: -46.63 },
+            end_location: { lat: -23.551, lng: -46.631 },
+            accessibility_report: {
+              confidence: 'high',
+              blockers: [{ type: 'stairs_or_steps', severity: 'high' }],
+            },
+          },
+        ],
+      };
+      expect((service as any).isRouteSuitableForAlone(route)).toBe(false);
+    });
+
+    it('mantém Sozinho quando bloqueador é apenas low (desvio ORS)', () => {
+      const route = {
+        ...baseRoute,
+        stages: [
+          {
+            mode: 'walk',
+            accessible: true,
+            warning: null,
+            slope_warning: false,
+            location: { lat: -23.55, lng: -46.63 },
+            end_location: { lat: -23.551, lng: -46.631 },
+            accessibility_report: {
+              confidence: 'high',
+              blockers: [{ type: 'ors_wheelchair_detour', severity: 'low' }],
+            },
+          },
+        ],
+      };
+      expect((service as any).isRouteSuitableForAlone(route)).toBe(true);
+    });
+
+    it('exclui Sozinho quando vários bloqueadores médios derrubam o score abaixo do piso', () => {
+      const route = {
+        ...baseRoute,
+        stages: [
+          {
+            mode: 'walk',
+            accessible: true,
+            warning: 'Trecho com superfície irregular',
+            slope_warning: false,
+            location: { lat: -23.55, lng: -46.63 },
+            end_location: { lat: -23.551, lng: -46.631 },
+            accessibility_report: {
+              confidence: 'medium',
+              blockers: [
+                { type: 'rough_surface', severity: 'medium' },
+                { type: 'ors_no_wheelchair_route', severity: 'medium' },
+                { type: 'transit_not_wheelchair', severity: 'medium' },
+              ],
+            },
+          },
+        ],
+      };
+      expect((service as any).isRouteSuitableForAlone(route)).toBe(false);
+    });
+
+    it('exclui Sozinho quando walk não tem coordenadas válidas', () => {
+      const route = {
+        ...baseRoute,
+        stages: [
+          {
+            mode: 'walk',
+            accessible: true,
+            warning: null,
+            location: { lat: NaN, lng: -46.63 },
+            end_location: { lat: -23.551, lng: -46.631 },
+          },
+        ],
+      };
+      expect((service as any).isRouteSuitableForAlone(route)).toBe(false);
     });
   });
 });

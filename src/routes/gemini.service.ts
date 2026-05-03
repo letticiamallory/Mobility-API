@@ -281,20 +281,19 @@ export class GeminiService {
         `https://maps.googleapis.com/maps/api/streetview?size=${size}&location=${lat},${lng}&heading=${heading}&pitch=0&key=${apiKey}`,
     );
 
-    const results: string[] = [];
-    for (const url of urls) {
-      try {
-        const metaUrl = url.replace('streetview?', 'streetview/metadata?');
-        const meta = await fetch(metaUrl);
-        const json = (await meta.json()) as { status?: string };
-        if (json.status === 'OK') {
-          results.push(url);
+    const metas = await Promise.all(
+      urls.map(async (url) => {
+        try {
+          const metaUrl = url.replace('streetview?', 'streetview/metadata?');
+          const meta = await fetch(metaUrl);
+          const json = (await meta.json()) as { status?: string };
+          return json.status === 'OK' ? url : null;
+        } catch {
+          return null;
         }
-      } catch {
-        // ignora erros individuais
-      }
-    }
-    return results;
+      }),
+    );
+    return metas.filter((u): u is string => u != null);
   }
 
   private async check3DTilesAvailability(
@@ -440,6 +439,9 @@ export class GeminiService {
   }> {
     try {
       const apiKey = process.env.GEMINI_API_KEY ?? '';
+      if (!apiKey.trim()) {
+        return { accessible: true, warning: null };
+      }
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
         return { accessible: true, warning: null };
       }
@@ -480,32 +482,47 @@ export class GeminiService {
         ? 'Analise esta imagem de satélite de alta resolução e avalie a acessibilidade do trecho para pessoas com deficiência. Identifique calçadas, rampas, obstáculos, faixas de pedestre e condições do pavimento.'
         : 'Analise estas imagens de Street View e avalie a acessibilidade do trecho para pessoas com deficiência. Identifique calçadas, rampas, obstáculos, faixas de pedestre e condições do pavimento.';
 
-      const validImageParts: GeminiPart[] = [];
-      for (const url of images) {
-        await this.sleep(1000);
-        const response = await fetch(url);
-        if (!response.ok) {
-          throw new Error(`Falha ao buscar imagem (${response.status}): ${url}`);
-        }
-        const buffer = await response.arrayBuffer();
-        if (buffer.byteLength < 1000) {
-          this.logger.warn(
-            `Imagem descartada por tamanho inválido (${buffer.byteLength} bytes): ${url}`,
-          );
-          continue;
-        }
-        const contentType = response.headers.get('content-type') ?? '';
-        const mimeType = contentType.includes('image/png')
-          ? 'image/png'
-          : 'image/jpeg';
-        const base64 = Buffer.from(buffer).toString('base64');
-        validImageParts.push({
-          inlineData: {
-            mimeType,
-            data: base64,
-          },
-        });
-      }
+      /** Downloads em paralelo — mesmo conjunto de imagens que antes, menos tempo de parede. */
+      const imageDownloads = await Promise.all(
+        images.map(async (url) => {
+          try {
+            const response = await fetch(url);
+            if (!response.ok) {
+              this.logger.warn(
+                `Falha ao buscar imagem (${response.status}): ${url}`,
+              );
+              return null;
+            }
+            const buffer = await response.arrayBuffer();
+            if (buffer.byteLength < 1000) {
+              this.logger.warn(
+                `Imagem descartada por tamanho inválido (${buffer.byteLength} bytes): ${url}`,
+              );
+              return null;
+            }
+            const contentType = response.headers.get('content-type') ?? '';
+            const mimeType = contentType.includes('image/png')
+              ? 'image/png'
+              : 'image/jpeg';
+            const base64 = Buffer.from(buffer).toString('base64');
+            return {
+              inlineData: {
+                mimeType,
+                data: base64,
+              },
+            } as GeminiPart;
+          } catch (err) {
+            this.logger.warn(
+              `Erro ao obter imagem para Gemini: ${(err as Error).message}`,
+            );
+            return null;
+          }
+        }),
+      );
+      const validImageParts = imageDownloads.filter(
+        (p): p is GeminiPart => p !== null,
+      );
+
       if (validImageParts.length === 0) {
         throw new Error('Nenhuma imagem válida para enviar ao Gemini');
       }

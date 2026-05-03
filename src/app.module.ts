@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { join } from 'path';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
 import { PhotoCache } from './cache/photo-cache.entity';
 import { UsersModule } from './users/users.module';
 import { PlacesModule } from './places/places.module';
@@ -50,5 +52,7 @@ import { PhotoCacheModule } from './cache/photo-cache.module';
     UberModule,
     PhotoCacheModule,
   ],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule {}

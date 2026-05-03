@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Client } from 'pg';
+import type { LegAccessibilityReport } from './contracts/route-accessibility.contract';
 
 interface TransitStep {
   html_instructions: string;
@@ -55,9 +56,13 @@ export interface RouteStage {
   arrival?: string;
   accessible: boolean;
   warning: string | null;
+  /** Inclinação > 8% neste trecho (cliente usa para badge / detalhe). */
+  slope_warning?: boolean;
   street_view_image: string | null;
   /** Até 3 URLs (Street View / satélite) — apenas etapas `walk`. */
   street_view_images?: string[] | null;
+  /** Fase 1+: motor estruturado (OSM, elevação, ORS opcional). */
+  accessibility_report?: LegAccessibilityReport;
 }
 
 export interface RouteOption {
