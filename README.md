@@ -1,232 +1,241 @@
-# 🦽 Mobility
- 
-API REST que ajuda PCDs a encontrarem trajetos urbanos seguros e acessíveis. O sistema analisa rotas em tempo real usando Street View e IA para identificar obstáculos como calçadas quebradas, ausência de rampas e bloqueios no caminho.
- 
+# Mobility API
+
+API REST em **NestJS** que serve o app **Mobility**: rotas urbanas com foco em **acessibilidade**, integração com mapas e IA para análise de trechos a pé, cadastro de usuários com tipo de deficiência, lugares, linhas/estações e notificações.
+
 ---
- 
-## 🛠️ Tech Stack
- 
-- **Node.js** + **NestJS**: framework modular e escalável para APIs REST
-- **TypeORM** + **PostgreSQL**: persistência de dados com entidades tipadas
-- **Google Maps Directions API**: cálculo de rotas e etapas de transporte
-- **Google Street View API**: imagens reais dos trechos a pé da rota
-- **Gemini 2.5 Flash (Google AI)**: análise de acessibilidade via visão computacional
-- **OpenRouteService (ORS)**: roteamento especializado para cadeirantes
-- **Nominatim (OpenStreetMap)**: geocodificação de endereços
- 
+
+## Sumário
+
+- [Arquitetura](#arquitetura)
+- [Stack](#stack)
+- [Requisitos](#requisitos)
+- [Instalação rápida](#instalação-rápida)
+- [Variáveis de ambiente](#variáveis-de-ambiente)
+- [Banco de dados e migrações](#banco-de-dados-e-migrações)
+- [Scripts npm](#scripts-npm)
+- [Módulos e rotas HTTP](#módulos-e-rotas-http)
+- [Contrato `POST /routes/check`](#contrato-post-routescheck)
+- [Testes](#testes)
+- [Deploy e produção](#deploy-e-produção)
+- [Segurança](#segurança)
+- [Licença](#licença)
+
 ---
- 
-## 📁 Estrutura do Projeto
- 
+
+## Arquitetura
+
+- **Framework:** NestJS 11, validação global (`ValidationPipe`: whitelist + transform).
+- **Persistência:** TypeORM + **PostgreSQL** (`synchronize: false` — schema via **migrations**).
+- **Auth:** JWT (`JWT_SECRET`), login, Google, verificação de e-mail e recuperação de senha (Resend quando configurado).
+- **Domínios:** usuários, lugares (`places`), histórico de rotas, linhas (`lines`), estações (`stations`), notificações FCM (Firebase Admin opcional), Uber (estimativa/deeplink), cache de fotos, etc.
+
 ```
-src/
-├── users/
-│   ├── users.controller.ts
-│   ├── users.controller.spec.ts
-│   ├── users.service.ts
-│   ├── users.service.spec.ts
-│   ├── users.entity.ts
-│   └── users.module.ts
-├── places/
-│   ├── places.controller.ts
-│   ├── places.controller.spec.ts
-│   ├── places.service.ts
-│   ├── places.service.spec.ts
-│   ├── places.entity.ts
-│   └── places.module.ts
-├── routes/
-│   ├── routes.controller.ts
-│   ├── routes.controller.spec.ts
-│   ├── routes.service.ts
-│   ├── routes.service.spec.ts
-│   ├── routes.entity.ts
-│   ├── routes.module.ts
-│   ├── google-routes.service.ts
-│   ├── streetview.service.ts
-│   ├── gemini.service.ts
-│   ├── ors.service.ts
-│   └── nominatim.service.ts
-├── reviews/
-│   ├── reviews.controller.ts
-│   ├── reviews.controller.spec.ts
-│   ├── reviews.service.ts
-│   ├── reviews.service.spec.ts
-│   ├── reviews.entity.ts
-│   └── reviews.module.ts
-├── app.controller.ts
-├── app.controller.spec.ts
-├── app.service.ts
-├── app.module.ts
-└── main.ts
-test/
-├── app.e2e-spec.ts
-└── jest-e2e.json
-.env
-.env.example
-.eslintrc.js
-.prettierrc
-nest-cli.json
-package.json
-tsconfig.json
-tsconfig.build.json
+mobility-api/
+├── src/
+│   ├── auth/              # login, JWT, Google, forgot/reset password, verify email
+│   ├── users/
+│   ├── places/
+│   ├── routes/            # checkRoute, Google Directions, Gemini, OTP, elev/clima
+│   ├── lines/
+│   ├── stations/
+│   ├── notifications/
+│   ├── elevation/, weather/, accessibility/, here/, foursquare/, uber/
+│   ├── cache/
+│   ├── migrations/        # TypeORM migrations (*.ts)
+│   ├── tests/             # Suites por persona, fluxo, contrato, bugs (Jest)
+│   ├── app.module.ts
+│   └── main.ts
+├── migrations/            # SQL auxiliar (ex.: accompanied em users/routes)
+├── test/                  # E2E Jest (ex.: app.e2e-spec.ts)
+├── jest.config.ts
+└── package.json
 ```
- 
+
 ---
- 
-## ⚙️ Pré-requisitos
- 
-- Node.js 18+
-- PostgreSQL rodando localmente ou via Docker
- 
+
+## Stack
+
+| Camada | Tecnologia |
+|--------|------------|
+| Runtime | Node.js 18+ |
+| API | NestJS, class-validator / class-transformer |
+| ORM | TypeORM |
+| BD | PostgreSQL |
+| Rotas / mapas | Google Directions, Street View (via serviços em `routes/`) |
+| IA | Gemini (análise de imagens de trechos) |
+| E-mail | Resend (`RESEND_API_KEY`) |
+| Push | Firebase Admin (opcional) |
+| Outros | HERE, ORS, OpenWeather, Foursquare, Wheelmap, Nominatim, OTP local (`OTP_URL`) |
+
 ---
- 
-## 🚀 Instalação e uso
- 
+
+## Requisitos
+
+- **Node.js** 18+
+- **PostgreSQL** acessível (local, Docker ou hospedado)
+- Chaves das APIs externas conforme funcionalidades desejadas (rotas completas exigem Google + Gemini, etc.)
+
+---
+
+## Instalação rápida
+
 ```bash
-# Clone o repositório
-git clone https://github.com/seu-usuario/mobility.git
-cd mobility
- 
-# Instale as dependências
+git clone <url-do-repositório>
+cd mobility-api
 npm install
- 
-# Configure as variáveis de ambiente
-cp .env.example .env
- 
-# Rode em desenvolvimento
+```
+
+Crie `.env` na raiz (veja [Variáveis de ambiente](#variáveis-de-ambiente)). Garanta o banco criado e rode as migrações:
+
+```bash
+npm run migration:run
 npm run start:dev
 ```
- 
-A API estará disponível em `http://localhost:3000`.
- 
+
+A API escuta em **`http://0.0.0.0:3000`** por padrão (`PORT` configurável).
+
 ---
- 
-## 🔑 Variáveis de Ambiente
- 
-Crie um arquivo `.env` na raiz do projeto com as seguintes variáveis:
- 
-```env
-DATABASE_HOST=localhost
-DATABASE_PORT=5432
-DATABASE_USER=postgres
-DATABASE_PASSWORD=sua_senha
-DATABASE_NAME=Mobility
- 
-GOOGLE_API_KEY=sua_chave_google
-GEMINI_API_KEY=sua_chave_gemini
-ORS_API_KEY=sua_chave_ors
+
+## Variáveis de ambiente
+
+**Obrigatórias para funcionamento mínimo local**
+
+| Variável | Descrição |
+|----------|-----------|
+| `DATABASE_HOST` | Host PostgreSQL (default `localhost`) |
+| `DATABASE_PORT` | Porta (default `5432`) |
+| `DATABASE_USER` | Usuário |
+| `DATABASE_PASSWORD` | Senha |
+| `DATABASE_NAME` | Nome do banco (ex.: `Mobility`) |
+| `JWT_SECRET` | Segredo para assinar JWT (não use o default em produção) |
+
+**Integrações (conforme uso)**
+
+| Variável | Descrição |
+|----------|-----------|
+| `GOOGLE_API_KEY` | Directions, Street View, parte de mapas |
+| `GOOGLE_MAPS_API_KEY` | Alternativa/overload para alguns serviços |
+| `GEMINI_API_KEY` | Análise de acessibilidade em imagens |
+| `ORS_API_KEY` | OpenRouteService |
+| `HERE_API_KEY` | HERE pedestrian / browse |
+| `OPENWEATHER_API_KEY` | Clima no trajeto |
+| `FOURSQUARE_API_KEY` | Pontos de interesse |
+| `WHEELMAP_API_KEY` | Locais acessíveis próximos |
+| `OTP_URL` | Serviço OTP de transporte público (default `http://localhost:8080`) |
+| `RESEND_API_KEY` | Envio de e-mails de verificação / reset |
+| `RESEND_FROM_EMAIL` | Remetente |
+| `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` | Push notifications |
+| `UBER_CLIENT_ID` | Estimativas Uber (header conforme implementação) |
+| `PORT` | Porta HTTP (default `3000`) |
+
+> Nunca commite `.env` com segredos reais. Mantenha-o no `.gitignore`.
+
+---
+
+## Banco de dados e migrações
+
+- **`synchronize: false`** — alterações de schema via migrations TypeORM em `src/migrations/`.
+- Scripts SQL pontuais em `migrations/` (ex.: colunas `accompanied` em `users` / `routes`) para ambientes que aplicam SQL manualmente.
+
+```bash
+npm run migration:run
+# Geração de nova migration (requer data-source / entidades alinhadas):
+npm run migration:generate -- src/migrations/NomeDaMigration
 ```
- 
-> ⚠️ Nunca suba o arquivo `.env` com chaves reais para o repositório. Certifique-se que ele está no `.gitignore`.
- 
+
+O CLI TypeORM usa `src/data-source.ts` para `migration:run`.
+
 ---
- 
-## 📡 Endpoints
- 
-### Users `/users`
- 
-| Método | Rota         | Descrição                    |
-|--------|--------------|------------------------------|
-| POST   | `/users`     | Cadastra um novo usuário     |
-| GET    | `/users/:id` | Busca um usuário pelo ID     |
- 
-**Body — POST `/users`**
-```json
-{
-  "name": "João Silva",
-  "email": "joao@email.com",
-  "password": "senha123",
-  "disability_type": "cadeirante"
-}
-```
- 
+
+## Scripts npm
+
+| Script | Descrição |
+|--------|-----------|
+| `npm run start:dev` | Nest em modo watch |
+| `npm run build` | Compila para `dist/` |
+| `npm run start:prod` | `node dist/main.js` |
+| `npm test` | Jest (inclui `src/**/*.spec.ts` e `src/tests/**/*.spec.ts`) |
+| `npm run test:cov` | Cobertura |
+| `npm run test:e2e` | E2E (`test/jest-e2e.json`) |
+| `npm run lint` | ESLint |
+| `npm run migration:run` | Aplica migrations pendentes |
+
 ---
- 
-### Places `/places`
- 
-| Método | Rota           | Descrição                     |
-|--------|----------------|-------------------------------|
-| GET    | `/places`      | Lista todos os locais         |
-| GET    | `/places/:id`  | Busca um local pelo ID        |
-| POST   | `/places`      | Cadastra um novo local        |
-| PUT    | `/places/:id`  | Atualiza os dados de um local |
- 
-**Body — POST/PUT `/places`**
-```json
-{
-  "name": "Terminal Rodoviário Central",
-  "type": "transporte",
-  "city": "Brasília",
-  "address": "Setor de Autobuses, s/n",
-  "accessible": true,
-  "disability_type": "cadeirante",
-  "observation": "Rampa disponível na entrada lateral"
-}
-```
- 
+
+## Módulos e rotas HTTP
+
+Visão resumida (prefixos podem exigir **Bearer JWT** conforme guard nas controllers).
+
+| Prefixo | Métodos principais |
+|---------|---------------------|
+| **`GET /`** | Health / hello (app controller) |
+| **`/auth`** | `POST login`, `google`, `verify-email`, `resend-verification`, `forgot-password`, `verify-reset-code`, `reset-password` |
+| **`/users`** | `POST` cadastro, `GET me`, `PATCH me`, `GET :id` |
+| **`/places`** | CRUD + `GET nearby` |
+| **`/routes`** | `POST check`, `GET :id`, `GET history/:user_id` |
+| **`/lines`** | Listagem, `GET :id`, `POST seed` (uso controlado) |
+| **`/stations`** | `GET nearby` |
+| **`/here`** | `GET nearby` |
+| **`/accessibility`** | `GET nearby` |
+| **`/notifications`** | registro FCM, teste |
+| **`/uber`** | `estimate`, `deeplink` |
+
+Consulte os arquivos `*.controller.ts` em cada pasta para parâmetros exatos e guards.
+
 ---
- 
-### Routes `/routes`
- 
-| Método | Rota                        | Descrição                           |
-|--------|-----------------------------|-------------------------------------|
-| POST   | `/routes/check`             | Verifica e analisa rotas acessíveis |
-| GET    | `/routes/:id`               | Busca uma rota pelo ID              |
-| GET    | `/routes/history/:user_id`  | Histórico de rotas do usuário       |
- 
-**Body — POST `/routes/check`**
-```json
-{
-  "user_id": 1,
-  "origin": "Av. Paulista, 1000, São Paulo",
-  "destination": "Estação da Sé, São Paulo",
-  "transport_type": "transit"
-}
-```
- 
-**Como funciona a análise de rota:**
-1. A Google Directions API calcula as opções de trajeto
-2. Para cada trecho a pé, o Street View captura imagens em 3 pontos (início, meio e fim)
-3. O Gemini 2.5 Flash analisa cada imagem e identifica obstáculos de acessibilidade
-4. As rotas são ordenadas priorizando as mais acessíveis
-5. O resultado retorna até 3 opções com alertas por trecho
- 
----
- 
-### Reviews `/reviews`
- 
-| Método | Rota            | Descrição                       |
-|--------|-----------------|---------------------------------|
-| POST   | `/reviews`      | Cadastra uma avaliação de local |
-| GET    | `/reviews/:id`  | Busca uma avaliação pelo ID     |
- 
-**Body — POST `/reviews`**
+
+## Contrato `POST /routes/check`
+
+Corpo típico (DTO `CheckRouteDto`):
+
 ```json
 {
   "user_id": 1,
-  "place_id": 3,
-  "accessible": true,
-  "comment": "Rampa em bom estado, fácil acesso"
+  "origin": "Endereço ou texto livre de origem",
+  "destination": "Endereço ou texto livre de destino",
+  "transport_type": "bus",
+  "accompanied": "alone",
+  "time_filter": "leave_now",
+  "time_value": "08:00",
+  "route_preference": "less_walking"
 }
 ```
- 
+
+- **`accompanied`:** `alone` prioriza rotas mais acessíveis; caso contrário perfil **acompanhado** (ordenção e avisos diferentes).
+- **`time_filter` / `time_value`:** repassados ao provedor de rotas quando aplicável.
+- Resposta inclui objeto **`route`** persistido (histórico), array **`routes`** com estágios analisados (clima, uber, imagens, alertas de inclinação, etc.) e **`search_profile`**.
+
 ---
- 
-## 🗺️ Roadmap
- 
-- [x] CRUD de usuários com perfil de deficiência
-- [x] CRUD de locais com dados de acessibilidade
-- [x] Sistema de avaliações colaborativas
-- [x] Verificação de rotas com Google Directions API
-- [x] Análise de acessibilidade via Street View + Gemini AI
-- [x] Roteamento para cadeirantes via OpenRouteService
-- [ ] Autenticação JWT
-- [ ] Filtro de rotas por tipo de deficiência
-- [ ] Frontend em React
- 
+
+## Testes
+
+- **Unitários / integração:** `src/**/*.spec.ts` (serviços, controllers).
+- **Suites adicionais em `src/tests/`:** personas de deficiência, fluxos de usuário, regressões de bugs conhecidos, contratos esperados pelo frontend (documentação executável).
+
+```bash
+npm test
+npm run test:cov
+```
+
 ---
- 
-## 📄 Licença
- 
-MIT
- 
+
+## Deploy e produção
+
+1. Defina `JWT_SECRET` e credenciais de BD seguras.
+2. Rode `npm run build` e execute `node dist/main.js` (ou PM2/Docker).
+3. Configure HTTPS atrás de proxy reverso em produção.
+4. Aplique todas as migrations antes de subir nova versão.
+
+---
+
+## Segurança
+
+- Use **JWT forte** e rotação de segredos em produção.
+- Restrinja **CORS** se necessário (ajuste em `main.ts` conforme política do deploy).
+- Revogue e rotacione chaves de APIs externas se expostas.
+
+---
+
+## Licença
+
+Projeto **privado** (`UNLICENSED` em `package.json`). Uso e redistribuição conforme acordo dos mantenedores.
