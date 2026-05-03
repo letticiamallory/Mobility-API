@@ -30,6 +30,14 @@ export class User {
   @Column({ type: 'enum', enum: DisabilityType })
   disability_type!: DisabilityType;
 
+  /** Telefone opcional; preenchido em Minhas informações no app. */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  phone!: string | null;
+
+  /** Data de nascimento no formato YYYY-MM-DD; opcional. */
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  birth_date!: string | null;
+
   @Column({ type: 'varchar', length: 32, nullable: true })
   accompanied!: string | null;
 

@@ -533,7 +533,10 @@ export class RoutesService {
   }
 
   async findHistoryByUserId(user_id: number): Promise<Routes[]> {
-    return this.routesRepository.find({ where: { user_id } });
+    return this.routesRepository.find({
+      where: { user_id },
+      order: { created_at: 'DESC' },
+    });
   }
 
   private calculateSlopePercentage(

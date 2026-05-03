@@ -39,6 +39,8 @@ export class UsersService {
     email: string;
     disability_type: DisabilityType;
     accompanied: string;
+    phone: string | null;
+    birth_date: string | null;
   }> {
     if (await this.usersTableHasAccompaniedColumn()) {
       const user = await this.usersRepository.findOne({ where: { id } });
@@ -53,11 +55,13 @@ export class UsersService {
         email: user.email,
         disability_type: user.disability_type,
         accompanied: user.accompanied ?? 'both',
+        phone: user.phone ?? null,
+        birth_date: user.birth_date ?? null,
       };
     }
 
     const rows = (await this.usersRepository.query(
-      `SELECT id, name, email, disability_type
+      `SELECT id, name, email, disability_type, phone, birth_date
        FROM users
        WHERE id = $1
        LIMIT 1`,
@@ -67,6 +71,8 @@ export class UsersService {
       name: string;
       email: string;
       disability_type: DisabilityType;
+      phone: string | null;
+      birth_date: string | null;
     }>;
 
     if (rows.length === 0) {
@@ -81,6 +87,8 @@ export class UsersService {
       email: user.email,
       disability_type: user.disability_type,
       accompanied: 'both',
+      phone: user.phone ?? null,
+      birth_date: user.birth_date ?? null,
     };
   }
 
@@ -97,6 +105,8 @@ export class UsersService {
     email: string;
     disability_type: DisabilityType;
     accompanied: string;
+    phone: string | null;
+    birth_date: string | null;
   }> {
     const user = await this.usersRepository.findOne({ where: { id } });
     if (!user) {
@@ -109,6 +119,16 @@ export class UsersService {
         throw new BadRequestException('Nome deve ter pelo menos 2 caracteres');
       }
       user.name = name;
+    }
+
+    if (dto.phone !== undefined) {
+      const p = dto.phone.replace(/\u00A0/g, ' ').trim();
+      user.phone = p.length > 0 ? p.slice(0, 32) : null;
+    }
+
+    if (dto.birth_date !== undefined) {
+      const b = dto.birth_date.trim();
+      user.birth_date = b.length > 0 ? b : null;
     }
 
     if (dto.disability_type !== undefined) {
@@ -126,6 +146,8 @@ export class UsersService {
       email: saved.email,
       disability_type: saved.disability_type,
       accompanied: saved.accompanied ?? 'both',
+      phone: saved.phone ?? null,
+      birth_date: saved.birth_date ?? null,
     };
   }
 
