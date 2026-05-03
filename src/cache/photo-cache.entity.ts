@@ -16,6 +16,10 @@ export class PhotoCache {
   @Column({ type: 'text' })
   photo_url: string;
 
+  /** JSON.stringify(string[]) — várias fotos do mesmo trecho (ex.: 3 Street Views em caminhada). */
+  @Column({ type: 'text', nullable: true })
+  urls_json: string | null;
+
   @Column({ nullable: true })
   source: string;
 

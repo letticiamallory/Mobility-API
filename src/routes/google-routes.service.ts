@@ -47,6 +47,8 @@ export interface RouteStage {
   accessible: boolean;
   warning: string | null;
   street_view_image: string | null;
+  /** Até 3 URLs (Street View / satélite) — apenas etapas `walk`. */
+  street_view_images?: string[] | null;
 }
 
 export interface RouteOption {

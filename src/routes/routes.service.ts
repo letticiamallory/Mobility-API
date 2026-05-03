@@ -242,8 +242,18 @@ export class RoutesService {
         let walkingStagesAnalyzed = 0;
 
         for (const stage of option.stages) {
-          stage.street_view_image =
-            await this.geminiService.resolveStageStreetViewImage(stage);
+          if (stage.mode === 'walk') {
+            const urls = await this.geminiService.resolveWalkStageImageUrls(stage);
+            (stage as RouteStage & { street_view_images?: string[] | null }).street_view_images =
+              urls.length > 0 ? urls : null;
+            stage.street_view_image = urls[0] ?? null;
+          } else if (stage.mode === 'bus' || stage.mode === 'subway') {
+            stage.street_view_image =
+              await this.geminiService.resolveTransitStopPhoto(stage);
+          } else {
+            stage.street_view_image =
+              await this.geminiService.resolveStageStreetViewImage(stage);
+          }
 
           if (stage.mode === 'walk') {
             const elevations = await this.elevationService.getElevation([
@@ -265,24 +275,28 @@ export class RoutesService {
               }
             }
 
-            // Para reduzir latência, limita análise pesada de imagem.
+            // Para reduzir latência, limita análise pesada de imagem (coordenadas do meio do trecho).
             if (
               walkingStagesAnalyzed < RoutesService.MAX_WALKING_STAGES_TO_ANALYZE
             ) {
               walkingStagesAnalyzed += 1;
-              const imageUrl = stage.street_view_image;
-              this.logger.log(`Street View URL: ${imageUrl}`);
+              const midLat =
+                (stage.location.lat + stage.end_location.lat) / 2;
+              const midLng =
+                (stage.location.lng + stage.end_location.lng) / 2;
+              this.logger.log(
+                `Gemini walk segment center: ${midLat},${midLng}`,
+              );
 
-              if (imageUrl) {
-                const result = await this.geminiService.analyzeAccessibility(imageUrl);
-                this.logger.log(`Gemini result: ${JSON.stringify(result)}`);
+              const result =
+                await this.geminiService.analyzeAccessibilityAt(midLat, midLng);
+              this.logger.log(`Gemini result: ${JSON.stringify(result)}`);
 
-                if (!result.accessible) {
-                  stage.accessible = false;
-                  stage.warning =
-                    result.warning ??
-                    'Possível obstáculo identificado nesse trecho — avalie se consegue passar ou prefira uma alternativa';
-                }
+              if (!result.accessible) {
+                stage.accessible = false;
+                stage.warning =
+                  result.warning ??
+                  'Possível obstáculo identificado nesse trecho — avalie se consegue passar ou prefira uma alternativa';
               }
             }
           }

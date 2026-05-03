@@ -57,9 +57,64 @@ export class GeminiService {
       return this.resolveWalkSegmentStreetView(stage);
     }
     if (stage.mode === 'bus' || stage.mode === 'subway') {
-      return this.resolveTransitStopImage(stage);
+      return this.resolveTransitStopPhoto(stage);
     }
     return null;
+  }
+
+  /**
+   * Até 3 imagens (Street View em ângulos diferentes ou fallback satélite) por trecho de caminhada.
+   * Resultado cacheado em `photo_cache` por coordenada do meio do segmento.
+   */
+  async resolveWalkStageImageUrls(stage: RouteStage): Promise<string[]> {
+    const midLat = (stage.location.lat + stage.end_location.lat) / 2;
+    const midLng = (stage.location.lng + stage.end_location.lng) / 2;
+    if (!Number.isFinite(midLat) || !Number.isFinite(midLng)) return [];
+
+    const bundleKey = this.photoCacheService.buildWalkBundleKey(midLat, midLng);
+    const cached = await this.photoCacheService.getBundle(bundleKey);
+    if (cached && cached.length > 0) {
+      return cached.slice(0, 3);
+    }
+
+    const apiKey = this.getGoogleMapsApiKey();
+    if (!apiKey) return [];
+
+    let urls = (await this.getStreetViewImages(midLat, midLng)).slice(0, 3);
+    if (urls.length === 0) {
+      const single = await this.resolveWalkSegmentStreetView(stage);
+      urls = single ? [single] : [];
+    }
+
+    if (urls.length > 0) {
+      await this.photoCacheService.setBundle(
+        bundleKey,
+        urls,
+        'walk_sv_bundle',
+        30,
+      );
+    }
+    return urls.slice(0, 3);
+  }
+
+  /** Uma foto do ponto de parada (Places ou Street View), com cache por parada. */
+  async resolveTransitStopPhoto(stage: RouteStage): Promise<string | null> {
+    const lat = stage.location.lat;
+    const lng = stage.location.lng;
+    const stopName = (stage.departure ?? '').trim();
+    const slug = stopName
+      ? stopName.toLowerCase().replace(/\s+/g, '_').slice(0, 64)
+      : 'unnamed';
+    const cacheKey = `transit_stop_${lat.toFixed(4)}_${lng.toFixed(4)}_${slug}`;
+
+    const hit = await this.photoCacheService.get(cacheKey);
+    if (hit) return hit;
+
+    const url = await this.resolveTransitStopImage(stage);
+    if (url) {
+      await this.photoCacheService.set(cacheKey, url, 'transit_stop', 30);
+    }
+    return url;
   }
 
   private async fetchStreetViewMetadataStatus(
@@ -375,18 +430,19 @@ export class GeminiService {
     return (await response.json()) as GeminiResponse;
   }
 
-  async analyzeAccessibility(imageUrl: string): Promise<{
+  /** Preferir este método: usa coordenadas do trecho (evita falha com URLs Place Photo sem lat/lng). */
+  async analyzeAccessibilityAt(
+    lat: number,
+    lng: number,
+  ): Promise<{
     accessible: boolean;
     warning: string | null;
   }> {
     try {
       const apiKey = process.env.GEMINI_API_KEY ?? '';
-      const params = new URL(imageUrl).searchParams;
-      const location =
-        params.get('location') ?? params.get('center') ?? '';
-      const [latRaw, lngRaw] = location.split(',');
-      const lat = Number(latRaw);
-      const lng = Number(lngRaw);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return { accessible: true, warning: null };
+      }
       const { images, source } = await this.getBestImages(lat, lng);
       this.logger.log(
         `[Gemini] imagens encontradas: ${images.length} fonte: ${source}`,
@@ -527,5 +583,26 @@ export class GeminiService {
       this.logger.error(`Erro no GeminiService: ${(error as Error).message}`);
       return { accessible: true, warning: null };
     }
+  }
+
+  /** Legado: tenta extrair lat/lng de URLs Street View / Static Map; senão assume acessível. */
+  async analyzeAccessibility(imageUrl: string): Promise<{
+    accessible: boolean;
+    warning: string | null;
+  }> {
+    try {
+      const params = new URL(imageUrl).searchParams;
+      const location =
+        params.get('location') ?? params.get('center') ?? '';
+      const [latRaw, lngRaw] = location.split(',');
+      const lat = Number(latRaw);
+      const lng = Number(lngRaw);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        return this.analyzeAccessibilityAt(lat, lng);
+      }
+    } catch {
+      /* ignore */
+    }
+    return { accessible: true, warning: null };
   }
 }
