@@ -367,25 +367,42 @@ export class RoutesService {
         });
       }
 
-      const sortedByAccessibilityAndDuration = analyzedRoutes
-        .sort((a, b) => {
+      const getDurationInMinutes = (duration: string): number => {
+        const minutes = Number.parseInt(duration, 10);
+        return Number.isNaN(minutes) ? Number.MAX_SAFE_INTEGER : minutes;
+      };
+
+      /**
+       * Sozinho: prioriza rotas mais acessíveis; depois as mais rápidas.
+       * Acompanhado: prioriza viabilidade (menor tempo); depois acessível como desempate —
+       * assim aparecem trajetos “mais diretos” mesmo com trechos que pedem ajuda.
+       */
+      const preferAccessibilityFirst = accompanied === 'alone';
+      const sortedCandidates = [...analyzedRoutes].sort((a, b) => {
+        if (preferAccessibilityFirst) {
           if (a.accessible && !b.accessible) return -1;
           if (!a.accessible && b.accessible) return 1;
-
-          const getDurationInMinutes = (duration: string): number => {
-            const minutes = Number.parseInt(duration, 10);
-            return Number.isNaN(minutes) ? Number.MAX_SAFE_INTEGER : minutes;
-          };
-
           return (
             getDurationInMinutes(a.total_duration) -
             getDurationInMinutes(b.total_duration)
           );
-        })
-        .slice(0, 3);
+        }
+        const da = getDurationInMinutes(a.total_duration);
+        const db = getDurationInMinutes(b.total_duration);
+        if (da !== db) return da - db;
+        if (a.accessible && !b.accessible) return -1;
+        if (!a.accessible && b.accessible) return 1;
+        return 0;
+      });
+
+      const searchProfile =
+        accompanied === 'alone' ? ('alone' as const) : ('companied' as const);
+
+      const sortedByAccessibilityAndDuration = sortedCandidates.slice(0, 3);
 
       let sortedRoutes = sortedByAccessibilityAndDuration.map((route) => ({
         ...route,
+        search_profile: searchProfile,
         warning:
           accompanied !== 'alone' && !route.stages.every((s) => s.accessible)
             ? 'Este trajeto contém trechos com obstáculos — recomendamos ir acompanhado'
@@ -434,6 +451,7 @@ export class RoutesService {
       const response = {
         route: savedRoute,
         routes: sortedRoutes,
+        search_profile: searchProfile,
       };
 
       if (user.fcm_token) {
