@@ -9,12 +9,15 @@ interface TransitStep {
   start_location: { lat: number; lng: number };
   end_location: { lat: number; lng: number };
   transit_details?: {
-    line: {
-      short_name: string;
-      vehicle: { type: string };
+    line?: {
+      short_name?: string;
+      vehicle?: { type?: string };
     };
-    departure_stop: { name: string };
-    arrival_stop: { name: string };
+    departure_stop?: { name?: string };
+    arrival_stop?: { name?: string };
+    /** Segundos desde epoch — horário real da partida (Google Transit). */
+    departure_time?: { text?: string; time_zone?: string; value?: number };
+    arrival_time?: { text?: string; time_zone?: string; value?: number };
   };
 }
 
@@ -42,6 +45,12 @@ export interface RouteStage {
   duration: string;
   location: { lat: number; lng: number };
   end_location: { lat: number; lng: number };
+  /** Nome do ponto de embarque (compatível com o app). */
+  stop_name?: string;
+  /** Horário local da partida no formato HH:mm (transit). */
+  departure_time?: string;
+  /** Unix segundos da partida — evita ambiguidade “amanhã” no cliente. */
+  transit_departure_unix?: number;
   departure?: string;
   arrival?: string;
   accessible: boolean;
@@ -70,7 +79,8 @@ interface MocBusLineRow {
 export class GoogleRoutesService {
   private readonly logger = new Logger(GoogleRoutesService.name);
 
-  private resolveClockToEpoch(clockText: string): number | null {
+  /** Interpreta HH:mm no calendário de hoje em America/Sao_Paulo (sem DST — BRT fixo). */
+  private saoPauloClockToEpochToday(clockText: string): number | null {
     const normalized = clockText.trim();
     const match = normalized.match(/^(\d{1,2}):(\d{2})$/);
     if (!match) return null;
@@ -78,9 +88,47 @@ export class GoogleRoutesService {
     const minutes = Number(match[2]);
     if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
     if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
-    const target = new Date();
-    target.setHours(hours, minutes, 0, 0);
-    return Math.floor(target.getTime() / 1000);
+
+    const tz = 'America/Sao_Paulo';
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const parts = formatter.formatToParts(new Date());
+    const y = Number(parts.find((p) => p.type === 'year')?.value);
+    const mo = Number(parts.find((p) => p.type === 'month')?.value);
+    const d = Number(parts.find((p) => p.type === 'day')?.value);
+    if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return null;
+    const isoLocal = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
+    return Math.floor(new Date(`${isoLocal}-03:00`).getTime() / 1000);
+  }
+
+  /** Hoje em SP à hora fixa — para “últimas partidas” (âncora no fim do dia útil, não 23h locale do servidor). */
+  private saoPauloTodayEpochAt(hour: number, minute: number): number {
+    const tz = 'America/Sao_Paulo';
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const parts = formatter.formatToParts(new Date());
+    const y = Number(parts.find((p) => p.type === 'year')?.value);
+    const mo = Number(parts.find((p) => p.type === 'month')?.value);
+    const d = Number(parts.find((p) => p.type === 'day')?.value);
+    const isoLocal = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`;
+    return Math.floor(new Date(`${isoLocal}-03:00`).getTime() / 1000);
+  }
+
+  private formatUnixAsHHmm(seconds: number, timeZone: string): string {
+    return new Date(seconds * 1000).toLocaleTimeString('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone,
+    });
   }
 
   private buildTransitTimeParams(
@@ -95,19 +143,26 @@ export class GoogleRoutesService {
     }
 
     if (normalized === 'last_departures_today') {
-      const endOfDay = new Date();
-      endOfDay.setHours(23, 0, 0, 0);
-      return `departure_time=${Math.floor(endOfDay.getTime() / 1000)}`;
+      const evening = this.saoPauloTodayEpochAt(20, 0);
+      return `departure_time=${Math.max(nowEpoch, evening)}`;
     }
 
     if (normalized === 'set_departure_time') {
-      const parsed = timeValue ? this.resolveClockToEpoch(timeValue) : null;
-      return `departure_time=${parsed ?? nowEpoch}`;
+      const parsed = timeValue ? this.saoPauloClockToEpochToday(timeValue) : null;
+      let dep = parsed ?? nowEpoch;
+      if (parsed !== null && parsed < nowEpoch) {
+        dep = parsed + 24 * 60 * 60;
+      }
+      return `departure_time=${dep}`;
     }
 
     if (normalized === 'set_arrival_time') {
-      const parsed = timeValue ? this.resolveClockToEpoch(timeValue) : null;
-      return `arrival_time=${parsed ?? nowEpoch + 60 * 60}`;
+      const parsed = timeValue ? this.saoPauloClockToEpochToday(timeValue) : null;
+      let arr = parsed ?? nowEpoch + 60 * 60;
+      if (parsed !== null && parsed < nowEpoch) {
+        arr = parsed + 24 * 60 * 60;
+      }
+      return `arrival_time=${arr}`;
     }
 
     return `departure_time=${nowEpoch}`;
@@ -144,7 +199,7 @@ export class GoogleRoutesService {
       return 'walk';
     }
 
-    const vehicleType = step.transit_details?.line.vehicle.type;
+    const vehicleType = step.transit_details?.line?.vehicle?.type;
     if (vehicleType === 'SUBWAY') {
       return 'subway';
     }
@@ -190,21 +245,38 @@ export class GoogleRoutesService {
         (route: TransitRoute, routeIndex: number) => {
           let stageNumber = 1;
           const stages = route.legs.flatMap((leg: TransitLeg) =>
-            leg.steps.map((step: TransitStep) => ({
-              stage: stageNumber++,
-              mode: this.mapStageMode(step),
-              line_code: step.transit_details?.line.short_name ?? undefined,
-              instruction: step.html_instructions.replace(/<[^>]*>/g, ''),
-              distance: step.distance.text,
-              duration: step.duration.text,
-              location: step.start_location,
-              end_location: step.end_location,
-              departure: step.transit_details?.departure_stop.name ?? undefined,
-              arrival: step.transit_details?.arrival_stop.name ?? undefined,
-              accessible: true,
-              warning: null,
-              street_view_image: null,
-            })),
+            leg.steps.map((step: TransitStep) => {
+              const td = step.transit_details;
+              const depUnix = td?.departure_time?.value;
+              const depTz = td?.departure_time?.time_zone ?? 'America/Sao_Paulo';
+              const stopName = td?.departure_stop?.name?.trim() ?? '';
+              const departClock =
+                typeof depUnix === 'number' && Number.isFinite(depUnix)
+                  ? this.formatUnixAsHHmm(depUnix, depTz)
+                  : undefined;
+
+              return {
+                stage: stageNumber++,
+                mode: this.mapStageMode(step),
+                line_code: td?.line?.short_name ?? undefined,
+                instruction: step.html_instructions.replace(/<[^>]*>/g, ''),
+                distance: step.distance.text,
+                duration: step.duration.text,
+                location: step.start_location,
+                end_location: step.end_location,
+                stop_name: stopName || undefined,
+                departure_time: departClock,
+                transit_departure_unix:
+                  typeof depUnix === 'number' && Number.isFinite(depUnix)
+                    ? depUnix
+                    : undefined,
+                departure: stopName || undefined,
+                arrival: td?.arrival_stop?.name ?? undefined,
+                accessible: true,
+                warning: null,
+                street_view_image: null,
+              };
+            }),
           );
 
           const totalDurationSeconds = route.legs.reduce(

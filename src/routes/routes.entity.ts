@@ -22,7 +22,7 @@ export class Routes {
   @Column()
   transport_type: string;
 
-  @Column({ default: 'both' })
+  @Column({ default: 'companied' })
   accompanied: string;
 
   @Column({ default: true })

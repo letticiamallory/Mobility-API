@@ -156,7 +156,13 @@ export class RoutesService {
         const destinationCoordinates =
           await this.nominatimService.getCoordinates(destination);
 
-        if (originCoordinates && destinationCoordinates) {
+        const tfNorm = (time_filter ?? '').trim().toLowerCase();
+        const preferOtp =
+          !time_filter ||
+          tfNorm === '' ||
+          tfNorm === 'leave_now';
+
+        if (originCoordinates && destinationCoordinates && preferOtp) {
           const otpRoutes = await this.otpService.planRoute(
             originCoordinates.lat,
             originCoordinates.lon,
@@ -367,9 +373,10 @@ export class RoutesService {
         });
       }
 
-      const getDurationInMinutes = (duration: string): number => {
-        const minutes = Number.parseInt(duration, 10);
-        return Number.isNaN(minutes) ? Number.MAX_SAFE_INTEGER : minutes;
+      /** Mesma lógica de `parseMinutes` — evita `parseInt` no começo da string ("1 h 30 min"). */
+      const rankByDuration = (total_duration: string): number => {
+        const m = this.parseMinutes(total_duration);
+        return m > 0 ? m : Number.MAX_SAFE_INTEGER;
       };
 
       /**
@@ -383,12 +390,11 @@ export class RoutesService {
           if (a.accessible && !b.accessible) return -1;
           if (!a.accessible && b.accessible) return 1;
           return (
-            getDurationInMinutes(a.total_duration) -
-            getDurationInMinutes(b.total_duration)
+            rankByDuration(a.total_duration) - rankByDuration(b.total_duration)
           );
         }
-        const da = getDurationInMinutes(a.total_duration);
-        const db = getDurationInMinutes(b.total_duration);
+        const da = rankByDuration(a.total_duration);
+        const db = rankByDuration(b.total_duration);
         if (da !== db) return da - db;
         if (a.accessible && !b.accessible) return -1;
         if (!a.accessible && b.accessible) return 1;
@@ -444,7 +450,7 @@ export class RoutesService {
         origin,
         destination,
         transport_type,
-        accompanied: accompanied ?? 'both',
+        accompanied: accompanied ?? 'companied',
         accessible: bestRoute.accessible,
       });
 

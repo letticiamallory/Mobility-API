@@ -39,6 +39,6 @@ export class UpdateMeDto {
 
   @IsOptional()
   @IsString()
-  @IsIn(['alone', 'companied', 'both'])
+  @IsIn(['alone', 'companied'])
   accompanied?: string;
 }

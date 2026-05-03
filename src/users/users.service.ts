@@ -54,7 +54,7 @@ export class UsersService {
         name: user.name,
         email: user.email,
         disability_type: user.disability_type,
-        accompanied: user.accompanied ?? 'both',
+        accompanied: user.accompanied ?? 'companied',
         phone: user.phone ?? null,
         birth_date: user.birth_date ?? null,
       };
@@ -86,7 +86,7 @@ export class UsersService {
       name: user.name,
       email: user.email,
       disability_type: user.disability_type,
-      accompanied: 'both',
+      accompanied: 'companied',
       phone: user.phone ?? null,
       birth_date: user.birth_date ?? null,
     };
@@ -145,7 +145,7 @@ export class UsersService {
       name: saved.name,
       email: saved.email,
       disability_type: saved.disability_type,
-      accompanied: saved.accompanied ?? 'both',
+      accompanied: saved.accompanied ?? 'companied',
       phone: saved.phone ?? null,
       birth_date: saved.birth_date ?? null,
     };
