@@ -233,6 +233,10 @@ export class RoutesService {
     time_filter?: string,
     time_value?: string,
     route_preference?: string,
+    origin_title?: string,
+    destination_title?: string,
+    origin_address?: string,
+    destination_address?: string,
   ): Promise<object> {
     const requestId = makeRouteCheckRequestId(user_id);
     const routeTelemetry = new RouteCheckTelemetry(this.logger, requestId);
@@ -450,6 +454,10 @@ export class RoutesService {
         transport_type,
         accompanied: accompanied ?? 'companied',
         accessible: bestRoute.accessible,
+        originTitle: origin_title?.trim() ? origin_title.trim() : null,
+        destinationTitle: destination_title?.trim() ? destination_title.trim() : null,
+        originAddress: origin_address?.trim() || origin?.trim() || null,
+        destinationAddress: destination_address?.trim() || destination?.trim() || null,
       });
 
       const degraded = deadline.expired();
@@ -759,9 +767,26 @@ export class RoutesService {
     transport_type: string;
     accompanied: string;
     accessible: boolean;
+    originTitle?: string | null;
+    destinationTitle?: string | null;
+    originAddress?: string | null;
+    destinationAddress?: string | null;
   }): Promise<Routes> {
     if (await this.routesTableHasAccompaniedColumn()) {
-      return this.routesRepository.save(this.routesRepository.create(data));
+      return this.routesRepository.save(
+        this.routesRepository.create({
+          user_id: data.user_id,
+          origin: data.origin,
+          destination: data.destination,
+          transport_type: data.transport_type,
+          accompanied: data.accompanied,
+          accessible: data.accessible,
+          originTitle: data.originTitle ?? null,
+          destinationTitle: data.destinationTitle ?? null,
+          originAddress: data.originAddress ?? null,
+          destinationAddress: data.destinationAddress ?? null,
+        }),
+      );
     }
 
     // Compatibilidade com banco legado sem a coluna "accompanied".

@@ -15,6 +15,22 @@ export class CheckRouteDto {
   @IsNotEmpty()
   destination!: string;
 
+  @IsOptional()
+  @IsString()
+  origin_title?: string;
+
+  @IsOptional()
+  @IsString()
+  destination_title?: string;
+
+  @IsOptional()
+  @IsString()
+  origin_address?: string;
+
+  @IsOptional()
+  @IsString()
+  destination_address?: string;
+
   @IsString()
   @IsNotEmpty()
   transport_type!: string;

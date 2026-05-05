@@ -55,6 +55,10 @@ export class RoutesController {
       body.time_filter,
       body.time_value,
       body.route_preference,
+      body.origin_title,
+      body.destination_title,
+      body.origin_address,
+      body.destination_address,
     );
   }
 
