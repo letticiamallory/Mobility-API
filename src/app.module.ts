@@ -24,6 +24,8 @@ import { PhotoCacheModule } from './cache/photo-cache.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      // Permite `$$` no .env → um `$` literal (igual ao Docker Compose / env-file).
+      expandVariables: true,
     }),
     TypeOrmModule.forRoot({
       type: 'postgres',

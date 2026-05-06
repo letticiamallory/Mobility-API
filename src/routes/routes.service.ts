@@ -73,7 +73,13 @@ export class RoutesService {
     if (!Number.isFinite(n) || n < 0) return 5;
     return Math.min(Math.floor(n), 15);
   })();
-  /** Limite em linha reta (Haversine) entre origem e destino geocodificados — não chama provedores de rota acima disso. */
+  /**
+   * Limite em linha reta (Haversine) entre origem e destino geocodificados.
+   *
+   * TEMP (dev): desativado por padrão, porque o app ainda pode testar rotas
+   * entre cidades (ex.: Montes Claros → Brasília). Quando for pra produção,
+   * reative com `ROUTES_ENFORCE_MAX_AIR_DISTANCE=1` e ajuste o limite se necessário.
+   */
   private static readonly MAX_ROUTE_AIR_DISTANCE_M = 150_000;
 
   constructor(
@@ -130,6 +136,82 @@ export class RoutesService {
     return Number.isFinite(fallback) ? fallback : 0;
   }
 
+  private saoPauloTodayEpochAt(hour: number, minute: number): number {
+    const tz = 'America/Sao_Paulo';
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const parts = formatter.formatToParts(new Date());
+    const y = Number(parts.find((p) => p.type === 'year')?.value);
+    const mo = Number(parts.find((p) => p.type === 'month')?.value);
+    const d = Number(parts.find((p) => p.type === 'day')?.value);
+    const isoLocal = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`;
+    return Math.floor(new Date(`${isoLocal}-03:00`).getTime() / 1000);
+  }
+
+  private saoPauloClockToEpochToday(clock: string): number | null {
+    const m = clock.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const h = Number(m[1]);
+    const mm = Number(m[2]);
+    if (!Number.isFinite(h) || !Number.isFinite(mm) || h < 0 || h > 23 || mm < 0 || mm > 59) {
+      return null;
+    }
+    return this.saoPauloTodayEpochAt(h, mm);
+  }
+
+  private firstTransitDepartureEpoch(route: RouteOption): number | null {
+    const stages = route.stages ?? [];
+    const firstTransit = stages.find((s) => {
+      const mode = `${s.mode ?? ''}`.toLowerCase();
+      return mode === 'bus' || mode === 'subway' || mode === 'rail';
+    });
+    if (!firstTransit) return null;
+    const unix = (firstTransit as unknown as { transit_departure_unix?: unknown })
+      .transit_departure_unix;
+    if (typeof unix === 'number' && Number.isFinite(unix) && unix > 0) return Math.floor(unix);
+    const hhmm = `${(firstTransit as unknown as { departure_time?: unknown }).departure_time ?? ''}`.trim();
+    if (!hhmm) return null;
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    const parsed = this.saoPauloClockToEpochToday(hhmm);
+    if (parsed == null) return null;
+    // Se a hora já passou hoje, assume que é do "próximo dia" (evita negativo).
+    return parsed < nowEpoch ? parsed + 24 * 60 * 60 : parsed;
+  }
+
+  private applyTimeFilter(routes: RouteOption[], timeFilter?: string): RouteOption[] {
+    const normalized = `${timeFilter ?? ''}`.trim().toLowerCase();
+    if (!normalized || normalized === 'set_departure_time' || normalized === 'set_arrival_time') {
+      return routes;
+    }
+
+    // Produto:
+    // - leave_now: próximos ônibus/metrô dentro de 30 min a partir da busca
+    // - last_departures_today: a partir das 21:00 (SP)
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    const windowStart = nowEpoch;
+    const windowEnd =
+      normalized === 'leave_now' ? nowEpoch + 30 * 60 : Number.POSITIVE_INFINITY;
+    const minDeparture =
+      normalized === 'last_departures_today'
+        ? Math.max(nowEpoch, this.saoPauloTodayEpochAt(21, 0))
+        : windowStart;
+
+    const filtered = routes.filter((r) => {
+      const dep = this.firstTransitDepartureEpoch(r);
+      if (dep == null) return false;
+      if (dep < minDeparture) return false;
+      if (dep > windowEnd) return false;
+      return true;
+    });
+
+    // Se não sobrar nada (ex.: rotas sem `departure_time`), não "mata" a busca.
+    return filtered.length > 0 ? filtered : routes;
+  }
+
   private walkingMinutes(route: RouteOption): number {
     return (route.stages ?? [])
       .filter((stage) => isWalkStageMode(stage.mode))
@@ -144,26 +226,71 @@ export class RoutesService {
     return Math.max(0, transitStages.length - 1);
   }
 
-  private applyRoutePreference(
+  private hasAnyTransitStage(route: RouteOption): boolean {
+    return (route.stages ?? []).some((stage) => {
+      const mode = `${stage.mode ?? ''}`.toLowerCase();
+      return mode === 'bus' || mode === 'subway' || mode === 'rail';
+    });
+  }
+
+  private walkStageCount(route: RouteOption): number {
+    return (route.stages ?? []).filter((stage) => isWalkStageMode(stage.mode)).length;
+  }
+
+  private normalizeRoutePreferences(
+    route_preferences?: string[],
+    route_preference?: string,
+  ): { lessTransfers: boolean; lessWalking: boolean } {
+    const set = new Set<string>();
+    if (Array.isArray(route_preferences)) {
+      for (const raw of route_preferences) {
+        const n = `${raw ?? ''}`.trim().toLowerCase();
+        if (n === 'less_transfers' || n === 'less_walking') set.add(n);
+      }
+    }
+    if (set.size === 0) {
+      const legacy = `${route_preference ?? ''}`.trim().toLowerCase();
+      if (legacy === 'less_transfers') set.add('less_transfers');
+      if (legacy === 'less_walking') set.add('less_walking');
+    }
+    return {
+      lessTransfers: set.has('less_transfers'),
+      lessWalking: set.has('less_walking'),
+    };
+  }
+
+  /** Preferências combináveis: menos trocas e/ou caminhar menos. */
+  private applyRoutePreferences(
     routes: RouteOption[],
-    routePreference?: string,
+    prefs: { lessTransfers: boolean; lessWalking: boolean },
   ): RouteOption[] {
-    const normalized = `${routePreference ?? 'active'}`.trim().toLowerCase();
-    if (normalized === 'less_transfers') {
-      return [...routes].sort((a, b) => {
-        const byTransfers = this.transferCount(a) - this.transferCount(b);
-        if (byTransfers !== 0) return byTransfers;
-        return this.walkingMinutes(a) - this.walkingMinutes(b);
-      });
+    if (!prefs.lessTransfers && !prefs.lessWalking) return routes;
+
+    let working = routes;
+    if (prefs.lessTransfers) {
+      const transitOnly = working.filter((r) => this.hasAnyTransitStage(r));
+      if (transitOnly.length > 0) working = transitOnly;
     }
-    if (normalized === 'less_walking') {
-      return [...routes].sort((a, b) => {
-        const byWalking = this.walkingMinutes(a) - this.walkingMinutes(b);
-        if (byWalking !== 0) return byWalking;
+
+    return [...working].sort((a, b) => {
+      if (prefs.lessTransfers) {
+        const d = this.transferCount(a) - this.transferCount(b);
+        if (d !== 0) return d;
+      }
+      if (prefs.lessWalking) {
+        const d = this.walkStageCount(a) - this.walkStageCount(b);
+        if (d !== 0) return d;
+        const d2 = this.walkingMinutes(a) - this.walkingMinutes(b);
+        if (d2 !== 0) return d2;
+      } else if (prefs.lessTransfers) {
+        const d = this.walkingMinutes(a) - this.walkingMinutes(b);
+        if (d !== 0) return d;
+      }
+      if (prefs.lessWalking) {
         return this.transferCount(a) - this.transferCount(b);
-      });
-    }
-    return routes;
+      }
+      return 0;
+    });
   }
 
   /**
@@ -288,9 +415,7 @@ export class RoutesService {
    *
    * Regras:
    *  - Cada rota recebe `agent_verdict` (score, warnings, rationale, persona notes).
-   *  - O `tab` do agente decide aba (após pós-processamento que já vetou rotas
-   *    com bloqueador grave confirmado pela fusão).
-   *  - Ordenação dentro de cada aba: score do agente desc.
+   *  - O agente NÃO decide a aba. A aba vem do score determinístico (faixas 80–100 / 60–79).
    */
   private applyAgentPartition<
     A extends {
@@ -337,48 +462,92 @@ export class RoutesService {
       agentOutput.routes.map((v) => [v.routeId, v]),
     );
 
-    type AloneItem = A | (Omit<C, 'search_profile'> & { search_profile: 'alone' });
-    type CompaniedItem =
-      | C
-      | (Omit<A, 'search_profile'> & { search_profile: 'companied' });
-
-    const finalAlone: AloneItem[] = [];
-    const finalCompanied: CompaniedItem[] = [];
-
+    // Só anexa veredito; não move entre abas nem reordena.
     ordered.forEach((route, idx) => {
       const verdict = verdictById.get(`r${idx}`) ?? null;
       route.agent_verdict = verdict;
-      const targetTab = verdict?.tab ?? route.search_profile;
-      if (targetTab === 'alone') {
-        finalAlone.push({ ...route, search_profile: 'alone' as const } as AloneItem);
-      } else {
-        finalCompanied.push({
-          ...route,
-          search_profile: 'companied' as const,
-        } as CompaniedItem);
-      }
     });
 
-    const sortByAgentScore = <U extends { agent_verdict: AgentRouteVerdict | null }>(
-      arr: U[],
-    ): U[] =>
-      arr
-        .slice()
-        .sort(
-          (a, b) =>
-            (b.agent_verdict?.accessibilityScore ?? 0) -
-            (a.agent_verdict?.accessibilityScore ?? 0),
-        );
-
     return {
-      routesAlone: sortByAgentScore(finalAlone),
-      routesCompanied: sortByAgentScore(finalCompanied),
+      routesAlone: baseAlone,
+      routesCompanied: baseCompanied,
       agentMeta: {
         enabled: true,
         fallback: agentOutput.fallback === true,
         partitionSummary: agentOutput.partitionSummary,
       },
     };
+  }
+
+  /**
+   * Garante que as duas abas não voltem vazias quando há ao menos 1 rota.
+   *
+   * Regra de produto (temporária/UX): sempre exibimos pelo menos 1 opção em "Sozinho"
+   * e 1 em "Acompanhado". Se não houver nenhuma rota elegível para Sozinho, repetimos
+   * a melhor alternativa disponível com um aviso explícito.
+   */
+  private ensureNonEmptyTabs<
+    A extends {
+      search_profile: 'alone';
+      warning?: string | null;
+      accompanied_warning?: string | null;
+    },
+    C extends {
+      search_profile: 'companied';
+      warning?: string | null;
+      accompanied_warning?: string | null;
+    },
+  >(args: { routesAlone: A[]; routesCompanied: C[] }): {
+    routesAlone: Array<A | (Omit<C, 'search_profile'> & { search_profile: 'alone' })>;
+    routesCompanied: Array<C | (Omit<A, 'search_profile'> & { search_profile: 'companied' })>;
+  } {
+    const { routesAlone, routesCompanied } = args;
+    const total = routesAlone.length + routesCompanied.length;
+    if (total === 0) return { routesAlone, routesCompanied };
+
+    const baseWarning =
+      'Nenhuma rota totalmente adequada para esta aba foi encontrada; exibindo a melhor alternativa disponível. Verifique os alertas e siga com atenção.';
+
+    const bestFromAlone = routesAlone[0];
+    const bestFromCompanied = routesCompanied[0];
+
+    type AloneOut =
+      | A
+      | (Omit<C, 'search_profile'> & { search_profile: 'alone' });
+    type CompaniedOut =
+      | C
+      | (Omit<A, 'search_profile'> & { search_profile: 'companied' });
+
+    const promoteToAlone = (r: A | C): AloneOut =>
+      ({
+        ...(r as object),
+        search_profile: 'alone',
+        warning: (r as { warning?: string | null }).warning ?? baseWarning,
+        accompanied_warning:
+          (r as { accompanied_warning?: string | null }).accompanied_warning ??
+          'Atenção: esta rota foi promovida para a aba Sozinho como fallback e pode exigir apoio em trechos.',
+      }) as AloneOut;
+
+    const promoteToCompanied = (r: A | C): CompaniedOut =>
+      ({
+        ...(r as object),
+        search_profile: 'companied',
+        warning: (r as { warning?: string | null }).warning ?? baseWarning,
+        accompanied_warning:
+          (r as { accompanied_warning?: string | null }).accompanied_warning ??
+          null,
+      }) as CompaniedOut;
+
+    const bestOverall = (bestFromAlone ?? bestFromCompanied) as A | C;
+
+    const aloneOut: AloneOut[] =
+      routesAlone.length > 0 ? routesAlone : [promoteToAlone(bestOverall)];
+    const companiedOut: CompaniedOut[] =
+      routesCompanied.length > 0
+        ? routesCompanied
+        : [promoteToCompanied(bestOverall)];
+
+    return { routesAlone: aloneOut, routesCompanied: companiedOut };
   }
 
   private haversineDistanceMeters(
@@ -414,6 +583,7 @@ export class RoutesService {
     time_filter?: string,
     time_value?: string,
     route_preference?: string,
+    route_preferences?: string[],
     origin_title?: string,
     destination_title?: string,
     origin_address?: string,
@@ -439,6 +609,7 @@ export class RoutesService {
           time_filter: time_filter ?? null,
           time_value: time_value ?? null,
           route_preference: route_preference ?? null,
+          route_preferences: route_preferences ?? null,
         })}`,
       );
       const user = await this.usersRepository.findOne({ where: { id: user_id } });
@@ -459,6 +630,7 @@ export class RoutesService {
           destination,
           transport_type,
           route_preference: route_preference ?? null,
+          route_preferences: route_preferences ?? null,
         })}`,
       );
 
@@ -486,7 +658,10 @@ export class RoutesService {
           destinationCoordinates.lat,
           destinationCoordinates.lon,
         );
-        if (airM > RoutesService.MAX_ROUTE_AIR_DISTANCE_M) {
+        const enforceMaxAir = ['1', 'true', 'yes', 'on'].includes(
+          `${process.env.ROUTES_ENFORCE_MAX_AIR_DISTANCE ?? ''}`.trim().toLowerCase(),
+        );
+        if (enforceMaxAir && airM > RoutesService.MAX_ROUTE_AIR_DISTANCE_M) {
           throw new BadRequestException(
             'A busca de trajetos está limitada a no máximo 150 km entre origem e destino (distância em linha reta).',
           );
@@ -555,7 +730,12 @@ export class RoutesService {
         return emptyResponse;
       }
 
-      routeOptions = this.applyRoutePreference(routeOptions, route_preference);
+      routeOptions = this.applyTimeFilter(routeOptions, time_filter);
+      const prefFlags = this.normalizeRoutePreferences(
+        route_preferences,
+        route_preference,
+      );
+      routeOptions = this.applyRoutePreferences(routeOptions, prefFlags);
 
       /**
        * Alternativas em paralelo — cada uma tem sua própria lista de estágios (sem estado compartilhado).
@@ -639,7 +819,10 @@ export class RoutesService {
         companied: routesCompanied.length,
       });
 
-      if (routesAlone.length === 0 && routesCompanied.length === 0) {
+      if (
+        routesAlone.length === 0 &&
+        routesCompanied.length === 0
+      ) {
         routeTelemetry.mark('response_empty_after_partition');
         this.logger.warn(
           '[checkRoute] lista vazia após análise — retornando sem persistir.',

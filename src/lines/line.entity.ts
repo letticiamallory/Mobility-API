@@ -1,9 +1,13 @@
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn } from 'typeorm';
+import type { LineRegionId } from './line-region';
 
 @Entity('lines')
 export class Line {
   @PrimaryGeneratedColumn()
   id!: number;
+
+  @Column({ default: 'montes_claros' })
+  region!: LineRegionId;
 
   @Column()
   code!: string; // ex: "1501"

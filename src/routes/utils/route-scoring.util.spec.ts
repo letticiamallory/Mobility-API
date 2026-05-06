@@ -144,7 +144,7 @@ describe('route-scoring.util', () => {
     ).toBe(true);
   });
 
-  it('partition: rota com fusion.alone_eligible=false vai para Acompanhado mesmo com score alto', () => {
+  it('partition: faixas de score definem aba (Sozinho 80–100)', () => {
     const route = {
       accessible: true,
       slope_warning: false,
@@ -162,8 +162,8 @@ describe('route-scoring.util', () => {
       },
     };
     const part = partitionRoutesByScore([route]);
-    expect(part.alone).toHaveLength(0);
-    expect(part.companied).toHaveLength(1);
+    expect(part.alone).toHaveLength(1);
+    expect(part.companied).toHaveLength(0);
   });
 
   it('score fusionado é o eixo principal: empurra rotas ruins para baixo do piso', () => {
@@ -203,31 +203,27 @@ describe('route-scoring.util', () => {
     expect(b).toBeLessThan(a);
   });
 
-  it('rota com score abaixo do piso vai para Acompanhado', () => {
-    const lowScoreRoute = {
+  it('partition: rotas 60–79 vão para Acompanhado', () => {
+    const midScoreRoute = {
       accessible: true,
       slope_warning: false,
       total_duration: '20 min',
-      stages: [
-        walk({
-          warning: 'Trecho 1 com obstaculos',
-          accessibility_report: {
-            confidence: 'medium',
-            blockers: [
-              { type: 'rough_surface', severity: 'medium' },
-              { type: 'ors_no_wheelchair_route', severity: 'medium' },
-            ],
-          },
-        }),
-        walk({
-          warning: 'Trecho 2 com obstaculos',
-          slope_warning: true,
-        }),
-      ],
+      stages: [walk()],
+      accessibility_fusion: {
+        score: 65,
+        state: 'caution' as const,
+        confidence: 'low' as const,
+        alone_eligible: false,
+        companied_recommended_reason: 'Score na faixa de acompanhado',
+        sourcesUsed: [],
+        legResults: [],
+        blockerCounts: { high: 0, medium: 0, low: 0 },
+      },
     };
-    const score = computeAccessibilityScore(lowScoreRoute);
-    expect(score).toBeLessThan(ROUTES_ALONE_MIN_SCORE);
-    const part = partitionRoutesByScore([lowScoreRoute]);
+    const score = computeAccessibilityScore(midScoreRoute);
+    expect(score).toBeGreaterThanOrEqual(60);
+    expect(score).toBeLessThanOrEqual(79);
+    const part = partitionRoutesByScore([midScoreRoute]);
     expect(part.alone).toHaveLength(0);
     expect(part.companied).toHaveLength(1);
   });

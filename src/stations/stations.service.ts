@@ -1,9 +1,42 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { PhotoCacheService } from '../cache/photo-cache.service';
 
+type NearbyPlace = {
+  place_id?: string;
+  name?: string;
+  vicinity?: string;
+  geometry?: { location?: { lat?: number; lng?: number } };
+  types?: string[];
+  rating?: number;
+};
+
+function haversineMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+): number {
+  const R = 6371000;
+  const r1 = (lat1 * Math.PI) / 180;
+  const r2 = (lat2 * Math.PI) / 180;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(r1) * Math.cos(r2) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatDistanceM(m: number): string {
+  if (m < 1000) return `${Math.round(m)}m`;
+  return `${(m / 1000).toFixed(1)}km`;
+}
+
 @Injectable()
 export class StationsService {
+  private readonly logger = new Logger(StationsService.name);
+
   constructor(private readonly photoCacheService: PhotoCacheService) {}
 
   async getStationPhoto(
@@ -67,42 +100,133 @@ export class StationsService {
     }
   }
 
+  /**
+   * Paradas / terminais próximos via Places Nearby Search.
+   * Agrega tipos de transporte e raio maior que o filtro único `bus_station` + 800 m,
+   * que costuma voltar vazio fora de grandes centros. Não chama Place Details por
+   * resultado (evita timeout e estouro de cota).
+   */
   async getNearby(lat: number, lng: number) {
-    const apiKey = process.env.GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_API_KEY;
-    const nearbyUrl = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=800&type=bus_station&key=${apiKey}`;
-    const { data } = await axios.get(nearbyUrl);
-    const places = data.results ?? [];
+    const apiKey =
+      process.env.GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_API_KEY ?? '';
+    if (!apiKey?.trim()) {
+      this.logger.warn('stations/nearby: GOOGLE_API_KEY / GOOGLE_MAPS_API_KEY ausente');
+      return [];
+    }
 
-    const details = await Promise.all(
-      places.map(async (place: any) => {
-        const placeId = place.place_id;
-        const detailsUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=name,vicinity,geometry,wheelchair_accessible_entrance,rating,opening_hours&key=${apiKey}`;
-        const { data: detailsData } = await axios.get(detailsUrl);
-        const result = detailsData.result ?? {};
+    const radius = 2800;
+    const types = ['bus_station', 'subway_station', 'transit_station'] as const;
 
-        const name = result.name ?? place.name;
-        const plat = result.geometry?.location?.lat ?? place.geometry?.location?.lat;
-        const plng = result.geometry?.location?.lng ?? place.geometry?.location?.lng;
+    const fetchType = async (type: string): Promise<NearbyPlace[]> => {
+      const nearbyUrl =
+        `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
+        `?location=${lat},${lng}&radius=${radius}&type=${encodeURIComponent(type)}&key=${apiKey}`;
+      try {
+        const { data } = await axios.get<{
+          status?: string;
+          results?: NearbyPlace[];
+          error_message?: string;
+        }>(nearbyUrl);
+        if (data.status === 'REQUEST_DENIED' || data.status === 'INVALID_REQUEST') {
+          this.logger.warn(
+            `stations/nearby type=${type}: ${data.status} ${data.error_message ?? ''}`,
+          );
+          return [];
+        }
+        return data.results ?? [];
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.logger.warn(`stations/nearby type=${type}: ${msg}`);
+        return [];
+      }
+    };
 
-        const photo =
-          typeof plat === 'number' && typeof plng === 'number'
-            ? await this.getStationPhoto(name, plat, plng)
-            : null;
+    const fetchKeyword = async (keyword: string): Promise<NearbyPlace[]> => {
+      const url =
+        `https://maps.googleapis.com/maps/api/place/nearbysearch/json` +
+        `?location=${lat},${lng}&radius=${radius}` +
+        `&keyword=${encodeURIComponent(keyword)}&key=${apiKey}`;
+      try {
+        const { data } = await axios.get<{
+          status?: string;
+          results?: NearbyPlace[];
+        }>(url);
+        return data.results ?? [];
+      } catch {
+        return [];
+      }
+    };
 
-        return {
-          id: placeId,
-          name,
-          address: result.vicinity ?? place.vicinity,
-          lat: plat,
-          lng: plng,
-          rating: result.rating ?? place.rating,
-          accessible: result.wheelchair_accessible_entrance ?? null,
-          opening_hours: result.opening_hours ?? null,
-          photo_url: photo,
-        };
-      }),
+    const buckets = await Promise.all(types.map((t) => fetchType(t)));
+    const byId = new Map<string, NearbyPlace>();
+    for (const list of buckets) {
+      for (const p of list) {
+        const id = p.place_id;
+        if (id && !byId.has(id)) byId.set(id, p);
+      }
+    }
+
+    if (byId.size === 0) {
+      const fallback = await Promise.all([
+        fetchKeyword('terminal ônibus'),
+        fetchKeyword('ponto de ônibus'),
+      ]);
+      for (const list of fallback) {
+        for (const p of list) {
+          const id = p.place_id;
+          if (id && !byId.has(id)) byId.set(id, p);
+        }
+      }
+    }
+
+    const merged = [...byId.values()].filter(
+      (p) =>
+        typeof p.geometry?.location?.lat === 'number' &&
+        typeof p.geometry?.location?.lng === 'number',
     );
 
-    return details;
+    merged.sort(
+      (a, b) =>
+        haversineMeters(
+          lat,
+          lng,
+          a.geometry!.location!.lat!,
+          a.geometry!.location!.lng!,
+        ) -
+        haversineMeters(
+          lat,
+          lng,
+          b.geometry!.location!.lat!,
+          b.geometry!.location!.lng!,
+        ),
+    );
+
+    const top = merged.slice(0, 28);
+
+    return top.map((place) => {
+      const plat = place.geometry!.location!.lat!;
+      const plng = place.geometry!.location!.lng!;
+      const d = haversineMeters(lat, lng, plat, plng);
+      const typesLower = (place.types ?? []).map((t) => t.toLowerCase());
+      const isSubway =
+        typesLower.includes('subway_station') ||
+        typesLower.includes('light_rail_station');
+
+      return {
+        id: place.place_id!,
+        type: isSubway ? 'subway' : 'bus',
+        name: place.name ?? 'Parada',
+        address: place.vicinity ?? '',
+        lat: plat,
+        lng: plng,
+        distanceNum: Math.round(d),
+        distance: formatDistanceM(d),
+        /** Nearby não traz wheelchair; não marcamos como falso. */
+        accessible: true,
+        lines: [] as string[],
+        nextBus: null as string | null,
+        rating: place.rating ?? null,
+      };
+    });
   }
 }

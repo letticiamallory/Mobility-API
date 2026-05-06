@@ -22,6 +22,7 @@
     "test:e2e:accessibility": "jest --config ./test/jest-e2e.json routes-check-accessibility.e2e-spec.ts --runInBand",
     "typeorm": "typeorm-ts-node-commonjs",
     "migration:run": "npm run typeorm -- migration:run -d src/data-source.ts",
+    "migration:run:prod": "node ./node_modules/typeorm/cli.js migration:run -d ./dist/src/data-source.js",
     "migration:generate": "npm run typeorm -- migration:generate -d src/data-source.ts"
   },
   "dependencies": {
@@ -38,6 +39,7 @@
     "cheerio": "^1.2.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
+    "fflate": "^0.8.2",
     "firebase-admin": "^13.8.0",
     "node-fetch": "^3.3.2",
     "passport": "^0.7.0",
@@ -60,6 +62,7 @@
     "@types/node": "^22.10.7",
     "@types/passport-jwt": "^4.0.1",
     "@types/supertest": "^6.0.3",
+    "chokidar": "^4.0.3",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",

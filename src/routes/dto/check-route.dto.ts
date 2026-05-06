@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsNotEmpty, IsString, IsInt, IsOptional, Min } from 'class-validator';
+import { IsNotEmpty, IsString, IsInt, IsOptional, Min, IsArray, IsIn } from 'class-validator';
 
 export class CheckRouteDto {
   @Type(() => Number)
@@ -50,4 +50,10 @@ export class CheckRouteDto {
   @IsOptional()
   @IsString()
   route_preference?: string;
+
+  /** Preferências combináveis: `less_transfers` e/ou `less_walking`. Se enviado, tem precedência sobre `route_preference` legado. */
+  @IsOptional()
+  @IsArray()
+  @IsIn(['less_transfers', 'less_walking'], { each: true })
+  route_preferences?: string[];
 }

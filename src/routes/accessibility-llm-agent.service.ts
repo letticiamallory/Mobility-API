@@ -138,7 +138,7 @@ export class AccessibilityLlmAgentService {
 
   /** Limiar de score para a aba Sozinho (configurável por env). */
   get aloneMinScore(): number {
-    return readIntEnv('ACCESSIBILITY_AGENT_ALONE_MIN_SCORE', 70, {
+    return readIntEnv('ACCESSIBILITY_AGENT_ALONE_MIN_SCORE', 80, {
       min: 0,
       max: 100,
     });

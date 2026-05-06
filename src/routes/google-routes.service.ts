@@ -155,7 +155,8 @@ export class GoogleRoutesService {
     }
 
     if (normalized === 'last_departures_today') {
-      const evening = this.saoPauloTodayEpochAt(20, 0);
+      // Produto: "Últimas partidas pra hoje" = a partir das 21:00 (horário de SP)
+      const evening = this.saoPauloTodayEpochAt(21, 0);
       return `departure_time=${Math.max(nowEpoch, evening)}`;
     }
 

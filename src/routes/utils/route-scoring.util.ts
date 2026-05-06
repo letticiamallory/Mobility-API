@@ -48,7 +48,7 @@ function readIntFromEnv(key: string, defaultVal: number, opts?: { min?: number; 
   return Math.max(min, Math.min(max, n));
 }
 
-export const ROUTES_ALONE_MIN_SCORE = readIntFromEnv('ROUTES_ALONE_MIN_SCORE', 65, {
+export const ROUTES_ALONE_MIN_SCORE = readIntFromEnv('ROUTES_ALONE_MIN_SCORE', 80, {
   min: 0,
   max: 100,
 });
@@ -177,18 +177,16 @@ export type Partitioned<T extends ScoredRoute> = {
 
 /**
  * Particiona em duas listas **disjuntas**:
- *  - Sozinho: rotas com score ≥ piso, sem bloqueador `high`, sem walk com geometria inválida (top N).
- *  - Acompanhado: as restantes (top N).
+ *  - Sozinho: score 80–100 (inclusivo)
+ *  - Acompanhado: score 60–79 (inclusivo)
+ *  - Abaixo de 60: não entra em nenhuma aba
  * Em ambas, ordenação primária por score desc, desempate por duração asc.
  */
 export function partitionRoutesByScore<T extends ScoredRoute>(
   routes: T[],
+  // `options` mantido por compat (não usado na regra por faixa).
   options?: { aloneMax?: number; companiedMax?: number; minScoreAlone?: number },
 ): Partitioned<T> {
-  const aloneMax = options?.aloneMax ?? ROUTES_ALONE_MAX;
-  const companiedMax = options?.companiedMax ?? ROUTES_COMPANIED_MAX;
-  const minScore = options?.minScoreAlone ?? ROUTES_ALONE_MIN_SCORE;
-
   const scored = routes.map((r) => ({
     ...r,
     accessibility_score: computeAccessibilityScore(r),
@@ -201,23 +199,17 @@ export function partitionRoutesByScore<T extends ScoredRoute>(
     return parseMinutes(a.total_duration) - parseMinutes(b.total_duration);
   };
 
+  // Regra por FAIXA (produto): qualquer rota dentro da faixa entra.
   const aloneCandidates = scored
-    .filter((r) => !hasHighBlocker(r))
-    .filter((r) => !hasInvalidWalkGeometry(r))
-    .filter((r) => r.accessibility_score >= minScore)
-    .filter((r) => r.accessible !== false)
-    .filter((r) => r.slope_warning !== true)
-    // Quando o motor de fusão está disponível, ele tem voto final sobre a elegibilidade
-    // para a aba Sozinho (top-K com vetos restritos — ver ACCESSIBILITY_ROUTE_SPECIALIST.md §1.1).
-    .filter((r) => r.accessibility_fusion?.alone_eligible !== false)
-    .sort(sortFn)
-    .slice(0, aloneMax);
+    .filter((r) => r.accessibility_score >= 80 && r.accessibility_score <= 100)
+    .sort(sortFn);
 
-  const aloneSet = new Set(aloneCandidates);
   const companiedCandidates = scored
-    .filter((r) => !aloneSet.has(r))
-    .sort(sortFn)
-    .slice(0, companiedMax);
+    .filter((r) => r.accessibility_score >= 60 && r.accessibility_score <= 79)
+    .sort(sortFn);
 
-  return { alone: aloneCandidates, companied: companiedCandidates };
+  return {
+    alone: aloneCandidates,
+    companied: companiedCandidates,
+  };
 }

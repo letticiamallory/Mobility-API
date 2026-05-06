@@ -8,18 +8,45 @@ Suporte a **duas regiões** em paralelo:
 | Brasília / DF | `graphs/brasilia/` | **8081** |
 | São Paulo (SP) | `graphs/sao-paulo/` | **8082** |
 
-## Início rápido com Docker
+## Início rápido com Docker (stack único)
 
-1. Gere `graph.obj` em **cada** pasta (no Windows ou em CI) — veja os `README.md` dentro de `graphs/montes-claros/` e `graphs/brasilia/`.
+Um único Compose sobe **OTP (3 regiões) + Postgres + API Nest + job de linhas/horários** (`lines-seed` roda só quando o banco está vazio ou sem horários).
+
+1. Gere `graph.obj` em **cada** pasta (no Windows ou em CI) — veja os `README.md` dentro de `graphs/montes-claros/`, `graphs/brasilia/` e `graphs/sao-paulo/`.
 2. Confirme que `otp-shaded-2.9.0.jar` está nesta pasta (`otp/`).
-3. Suba os dois servidores:
+3. Na **raiz** do `mobility-api`, tenha um `.env` com suas chaves (Google, Gemini, etc.). O Compose injeta `DATABASE_*` e **sobrescreve** `OTP_URL_*` para os hostnames internos dos serviços OTP — não precisa mudar o `.env` para Docker nesse ponto.
+4. Suba tudo:
+
+```powershell
+cd C:\Users\lett\Desktop\mobility-api
+docker compose up --build
+```
+
+Ou só a partir de `otp/`:
 
 ```powershell
 cd C:\Users\lett\Desktop\mobility-api\otp
-docker compose -f docker-compose.otp.yml up
+docker compose -f docker-compose.otp.yml up --build
 ```
 
-4. No `.env` do Nest:
+- API: `http://localhost:3000`  
+- OTP: portas **8080 / 8081 / 8082** como antes.
+
+### Linhas e horários no banco (`POST /lines/seed`)
+
+O seed agora agrega **três regiões** (campo `region` na tabela `lines`):
+
+| Região | Fonte | Horários (grade) |
+|--------|--------|-------------------|
+| `montes_claros` | onibusmoc.com | Sim |
+| `brasilia` | brasiliamobilidade.com.br | Sim (HTML) |
+| `sao_paulo` | GTFS público SPTrans (`POST /lines/seed`) | Não — só catálogo; opcional `SPTRANS_GTFS_URL` |
+
+Limite opcional de linhas DF por execução: `LINES_BRASILIA_MAX_TRAVELS` (padrão **1200**).
+
+### API só no host (sem Docker), OTP no Docker
+
+Aí sim use no `.env` do Nest:
 
 ```env
 OTP_URL=http://localhost:8080

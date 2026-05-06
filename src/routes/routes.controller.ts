@@ -44,6 +44,7 @@ export class RoutesController {
         time_filter: body.time_filter ?? null,
         time_value: body.time_value ?? null,
         route_preference: body.route_preference ?? null,
+        route_preferences: body.route_preferences ?? null,
       })}`,
     );
     return this.routesService.checkRoute(
@@ -55,6 +56,7 @@ export class RoutesController {
       body.time_filter,
       body.time_value,
       body.route_preference,
+      body.route_preferences,
       body.origin_title,
       body.destination_title,
       body.origin_address,
