@@ -10,6 +10,10 @@
  */
 
 import type { LegAccessibilityReport } from '../contracts/route-accessibility.contract';
+import type {
+  LegFusionResult,
+  RouteFusionResult,
+} from '../contracts/route-accessibility-fusion.contract';
 import { isWalkStageMode, walkSegmentCoordsOk } from './stage-normalization.util';
 
 export type ScoredRouteStage = {
@@ -21,6 +25,8 @@ export type ScoredRouteStage = {
   location?: { lat: number; lng: number } | null;
   end_location?: { lat: number; lng: number } | null;
   accessibility_report?: LegAccessibilityReport;
+  /** Resultado fusionado por trecho (Fase 4). Opcional para compatibilidade. */
+  accessibility_fusion?: LegFusionResult;
 };
 
 export type ScoredRoute = {
@@ -28,6 +34,8 @@ export type ScoredRoute = {
   slope_warning?: boolean;
   total_duration?: string;
   stages?: ScoredRouteStage[];
+  /** Resultado fusionado por rota (Fase 4). Opcional para compatibilidade. */
+  accessibility_fusion?: RouteFusionResult;
 };
 
 function readIntFromEnv(key: string, defaultVal: number, opts?: { min?: number; max?: number }): number {
@@ -113,10 +121,23 @@ export function hasInvalidWalkGeometry(route: ScoredRoute): boolean {
 
 /**
  * Score 0–100 — maior = mais acessível.
- * Penaliza estado da rota, alertas/warnings em walks e cada bloqueador estruturado por severidade.
- * Bonifica fontes positivas confirmadas (ORS wheelchair encontrou rota, etc.) com teto baixo.
+ *
+ *  - Se a rota tiver `accessibility_fusion` (Fase 4), o score fusionado é o **eixo principal**
+ *    e o score legado entra com peso menor para preservar desempates históricos
+ *    (tempo de caminhada, flags accessible/slope).
+ *  - Sem fusão (compat), o cálculo legado continua valendo integralmente.
  */
 export function computeAccessibilityScore(route: ScoredRoute): number {
+  const legacy = computeLegacyScore(route);
+  const fusion = route.accessibility_fusion?.score;
+  if (typeof fusion === 'number' && Number.isFinite(fusion)) {
+    // Blend: 70% fusão (eixo principal) + 30% legado (desempate por minutos a pé etc.).
+    return Math.max(0, Math.min(100, Math.round(fusion * 0.7 + legacy * 0.3)));
+  }
+  return legacy;
+}
+
+function computeLegacyScore(route: ScoredRoute): number {
   let score = 100;
 
   if (route.accessible === false) score -= 25;
@@ -186,6 +207,9 @@ export function partitionRoutesByScore<T extends ScoredRoute>(
     .filter((r) => r.accessibility_score >= minScore)
     .filter((r) => r.accessible !== false)
     .filter((r) => r.slope_warning !== true)
+    // Quando o motor de fusão está disponível, ele tem voto final sobre a elegibilidade
+    // para a aba Sozinho (top-K com vetos restritos — ver ACCESSIBILITY_ROUTE_SPECIALIST.md §1.1).
+    .filter((r) => r.accessibility_fusion?.alone_eligible !== false)
     .sort(sortFn)
     .slice(0, aloneMax);
 

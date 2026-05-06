@@ -602,6 +602,56 @@ export class GeminiService {
     }
   }
 
+  /**
+   * Versão "para fusão": NUNCA retorna `safe` por padrão de erro/timeout.
+   *
+   * Em vez de cair em `accessible: true` quando há falha (chave ausente, sem imagem,
+   * parse_failed etc.), devolve `state: 'unknown'` com `reason`. A camada de fusão
+   * (`RouteAccessibilityFusionService`) decide o impacto no score.
+   *
+   * Política completa: ../../ACCESSIBILITY_ROUTE_SPECIALIST.md §4.1
+   */
+  async analyzeWalkAccessibilityForFusion(
+    lat: number,
+    lng: number,
+  ): Promise<
+    | { state: 'safe' | 'unsafe'; confidence: 'high' | 'medium' | 'low'; detail?: string }
+    | { state: 'unknown'; reason: 'no_key' | 'no_image' | 'timeout' | 'error' | 'parse_failed' }
+  > {
+    const apiKey = process.env.GEMINI_API_KEY ?? '';
+    if (!apiKey.trim()) {
+      return { state: 'unknown', reason: 'no_key' };
+    }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return { state: 'unknown', reason: 'no_image' };
+    }
+
+    try {
+      const result = await this.analyzeAccessibilityAt(lat, lng);
+      // O método legado pode devolver `accessible:true` em fallback permissivo (sem imagem,
+      // parse_failed etc.). Aqui só consideramos "safe" quando temos warning null e a chamada
+      // realmente passou pelo modelo — sem garantia, descemos para `unknown`.
+      if (result.accessible === false && result.warning) {
+        return {
+          state: 'unsafe',
+          confidence: 'medium',
+          detail: result.warning,
+        };
+      }
+      if (result.accessible === true && result.warning === null) {
+        // Tratamos como confiança baixa — visão é uma fonte só, e às vezes o fallback
+        // permissivo dispara mesmo sem dado. A fusão aceita só como reforço.
+        return { state: 'safe', confidence: 'low' };
+      }
+      return { state: 'unknown', reason: 'parse_failed' };
+    } catch (err) {
+      this.logger.warn(
+        `[Gemini fusion] erro: ${(err as Error).message ?? 'desconhecido'}`,
+      );
+      return { state: 'unknown', reason: 'error' };
+    }
+  }
+
   /** Legado: tenta extrair lat/lng de URLs Street View / Static Map; senão assume acessível. */
   async analyzeAccessibility(imageUrl: string): Promise<{
     accessible: boolean;

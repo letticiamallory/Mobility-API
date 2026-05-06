@@ -35,6 +35,13 @@ lerna-debug.log*
 !.vscode/launch.json
 !.vscode/extensions.json
 
+# OpenTripPlanner local tooling / build artifacts
+/otp/tools/
+/otp/graph/graph.obj
+/otp/graphs/**/graph.obj
+/otp/graphs/**/*.osm.pbf
+/otp/graphs/**/*.zip
+
 # dotenv environment variable files
 .env
 .env.development.local

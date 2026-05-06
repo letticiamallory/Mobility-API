@@ -36,6 +36,21 @@ import {
   makeRouteCheckRequestId,
 } from './telemetry/route-check-telemetry';
 import { WalkAccessibilityEngineService } from './walk-accessibility-engine.service';
+import { RouteAccessibilityFusionService } from './route-accessibility-fusion.service';
+import { AccessibilityLlmAgentService } from './accessibility-llm-agent.service';
+import type {
+  AccessibilityAgentOutput,
+  AgentPersona,
+  AgentRouteVerdict,
+} from './contracts/accessibility-llm-agent.contract';
+import type {
+  LegFusionResult,
+  WalkLegSignals,
+} from './contracts/route-accessibility-fusion.contract';
+import type {
+  LegAccessibilityBlocker,
+  LegAccessibilityReport,
+} from './contracts/route-accessibility.contract';
 import {
   computeAccessibilityScore as computeRouteScore,
   partitionRoutesByScore,
@@ -79,7 +94,27 @@ export class RoutesService {
     private nominatimService: NominatimService,
     private otpService: OtpService,
     private walkAccessibilityEngine: WalkAccessibilityEngineService,
+    private fusionService: RouteAccessibilityFusionService,
+    private accessibilityAgent: AccessibilityLlmAgentService,
   ) {}
+
+  /**
+   * Mapeia `disability_type` do usuário para persona usada pelo agente LLM.
+   * Default conservador: `reduced_mobility` (a mais genérica) quando não houver
+   * tipo definido — evita score otimista demais.
+   */
+  private resolveAgentPersona(user: User): AgentPersona {
+    switch (user.disability_type) {
+      case DisabilityType.VISUAL:
+        return 'low_vision';
+      case DisabilityType.WHEELCHAIR:
+        return 'wheelchair';
+      case DisabilityType.REDUCED_MOBILITY:
+        return 'reduced_mobility';
+      default:
+        return 'reduced_mobility';
+    }
+  }
 
   private parseMinutes(value: unknown): number {
     if (typeof value !== 'string' && typeof value !== 'number') return 0;
@@ -198,6 +233,152 @@ export class RoutesService {
     route: Awaited<ReturnType<RoutesService['enrichSingleRouteOption']>>,
   ): number {
     return computeRouteScore(route);
+  }
+
+  /**
+   * Executa o agente LLM (Gemini) sobre as rotas analisadas.
+   * Telemetria mínima (modelo, latência) e isolamento de erros — nunca faz a
+   * requisição HTTP do `checkRoute` quebrar.
+   */
+  private async runAccessibilityAgent(args: {
+    analyzedRoutes: Awaited<ReturnType<RoutesService['enrichSingleRouteOption']>>[];
+    user: User;
+    requestId: string;
+    wheelchairRouting: boolean;
+  }): Promise<{
+    output: AccessibilityAgentOutput | null;
+    model: string;
+    latencyMs: number;
+  }> {
+    if (!this.accessibilityAgent.isEnabled()) {
+      return { output: null, model: this.accessibilityAgent.model, latencyMs: 0 };
+    }
+    const persona = this.resolveAgentPersona(args.user);
+    const input = this.accessibilityAgent.buildInput(
+      args.analyzedRoutes,
+      persona,
+      {
+        requestId: args.requestId,
+        wheelchairRouting: args.wheelchairRouting,
+      },
+    );
+    const startedAt = Date.now();
+    try {
+      const output = await this.accessibilityAgent.analyze(input);
+      return {
+        output,
+        model: this.accessibilityAgent.model,
+        latencyMs: Date.now() - startedAt,
+      };
+    } catch (err) {
+      this.logger.warn(
+        `[checkRoute] agente de acessibilidade falhou: ${(err as Error).message}`,
+      );
+      return {
+        output: null,
+        model: this.accessibilityAgent.model,
+        latencyMs: Date.now() - startedAt,
+      };
+    }
+  }
+
+  /**
+   * Aplica os vereditos do agente sobre o particionamento determinístico.
+   * Sem agente (ou em fallback heurístico), devolve o particionamento original.
+   *
+   * Regras:
+   *  - Cada rota recebe `agent_verdict` (score, warnings, rationale, persona notes).
+   *  - O `tab` do agente decide aba (após pós-processamento que já vetou rotas
+   *    com bloqueador grave confirmado pela fusão).
+   *  - Ordenação dentro de cada aba: score do agente desc.
+   */
+  private applyAgentPartition<
+    A extends {
+      agent_verdict: AgentRouteVerdict | null;
+      search_profile: 'alone';
+    },
+    C extends {
+      agent_verdict: AgentRouteVerdict | null;
+      search_profile: 'companied';
+    },
+  >(args: {
+    baseAlone: A[];
+    baseCompanied: C[];
+    agentOutput: AccessibilityAgentOutput | null;
+  }): {
+    routesAlone: Array<A | (Omit<C, 'search_profile'> & { search_profile: 'alone' })>;
+    routesCompanied: Array<C | (Omit<A, 'search_profile'> & { search_profile: 'companied' })>;
+    agentMeta:
+      | {
+          enabled: true;
+          fallback: boolean;
+          partitionSummary?: string;
+        }
+      | null;
+  } {
+    const baseAlone = args.baseAlone;
+    const baseCompanied = args.baseCompanied;
+    const agentOutput = args.agentOutput;
+
+    if (!agentOutput) {
+      return {
+        routesAlone: baseAlone,
+        routesCompanied: baseCompanied,
+        agentMeta: null,
+      };
+    }
+
+    // Os routeIds são determinísticos (`r${idx}`), na ordem de `analyzedRoutes`,
+    // que é a mesma ordem de `partitioned.alone ∪ partitioned.companied`. Para
+    // mapear veredito ↔ rota original, reconstruímos a ordem global concatenando
+    // alone (na ordem do top-K) + companied (idem).
+    const ordered: Array<A | C> = [...baseAlone, ...baseCompanied];
+    const verdictById = new Map(
+      agentOutput.routes.map((v) => [v.routeId, v]),
+    );
+
+    type AloneItem = A | (Omit<C, 'search_profile'> & { search_profile: 'alone' });
+    type CompaniedItem =
+      | C
+      | (Omit<A, 'search_profile'> & { search_profile: 'companied' });
+
+    const finalAlone: AloneItem[] = [];
+    const finalCompanied: CompaniedItem[] = [];
+
+    ordered.forEach((route, idx) => {
+      const verdict = verdictById.get(`r${idx}`) ?? null;
+      route.agent_verdict = verdict;
+      const targetTab = verdict?.tab ?? route.search_profile;
+      if (targetTab === 'alone') {
+        finalAlone.push({ ...route, search_profile: 'alone' as const } as AloneItem);
+      } else {
+        finalCompanied.push({
+          ...route,
+          search_profile: 'companied' as const,
+        } as CompaniedItem);
+      }
+    });
+
+    const sortByAgentScore = <U extends { agent_verdict: AgentRouteVerdict | null }>(
+      arr: U[],
+    ): U[] =>
+      arr
+        .slice()
+        .sort(
+          (a, b) =>
+            (b.agent_verdict?.accessibilityScore ?? 0) -
+            (a.agent_verdict?.accessibilityScore ?? 0),
+        );
+
+    return {
+      routesAlone: sortByAgentScore(finalAlone),
+      routesCompanied: sortByAgentScore(finalCompanied),
+      agentMeta: {
+        enabled: true,
+        fallback: agentOutput.fallback === true,
+        partitionSummary: agentOutput.partitionSummary,
+      },
+    };
   }
 
   private haversineDistanceMeters(
@@ -390,18 +571,21 @@ export class RoutesService {
         deadline_remaining_ms: deadline.remaining(),
       });
 
+      this.logFusionSummaries(routeTelemetry, analyzedRoutes);
+
       const partitioned = partitionRoutesByScore(analyzedRoutes, {
         aloneMax: ROUTES_ALONE_MAX,
         companiedMax: ROUTES_COMPANIED_MAX,
       });
 
-      const routesAlone = partitioned.alone.map((route) => ({
+      const baseRoutesAlone = partitioned.alone.map((route) => ({
         ...route,
         search_profile: 'alone' as const,
         warning: null,
         accompanied_warning: null,
+        agent_verdict: null as AgentRouteVerdict | null,
       }));
-      const routesCompanied = partitioned.companied.map((route) => {
+      const baseRoutesCompanied = partitioned.companied.map((route) => {
         const hasHigh = (route.stages ?? []).some((s) =>
           s.accessibility_report?.blockers?.some((b) => b.severity === 'high'),
         );
@@ -415,8 +599,32 @@ export class RoutesService {
             ? 'Este trajeto contém trechos com obstáculos — atenção ao deslocamento com apoio.'
             : route.warning,
           accompanied_warning: null,
+          agent_verdict: null as AgentRouteVerdict | null,
         };
       });
+
+      // Camada do agente LLM (Gemini): re-rotula `alone`/`accompanied` com base no
+      // painel multi-fonte e na persona do usuário. Em caso de erro/desabilitado,
+      // o fallback mantém o particionamento determinístico atual.
+      const agentRun = await this.runAccessibilityAgent({
+        analyzedRoutes,
+        user,
+        requestId,
+        wheelchairRouting: this.otpWheelchairRouting(user, accompanied),
+      });
+      const { routesAlone, routesCompanied, agentMeta } = this.applyAgentPartition({
+        baseAlone: baseRoutesAlone,
+        baseCompanied: baseRoutesCompanied,
+        agentOutput: agentRun.output,
+      });
+      if (agentRun.output) {
+        routeTelemetry.mark('agent_done', {
+          fallback: agentRun.output.fallback === true,
+          model: agentRun.model,
+          latency_ms: agentRun.latencyMs,
+          routes: agentRun.output.routes.length,
+        });
+      }
 
       const searchProfileMeta =
         accompanied === 'alone' ? ('alone' as const) : ('companied' as const);
@@ -461,13 +669,37 @@ export class RoutesService {
       });
 
       const degraded = deadline.expired();
+      const includeFusionDebug = process.env.NODE_ENV !== 'production';
       const response = {
         route: savedRoute,
         routes: legacyRoutes,
         routes_alone: routesAlone,
         routes_companied: routesCompanied,
         search_profile: searchProfileMeta,
+        ...(agentMeta ? { agent: agentMeta } : {}),
         ...(degraded ? { degraded: true, degraded_reason: 'time_budget' } : {}),
+        ...(includeFusionDebug
+          ? {
+              fusion_debug: {
+                requestId,
+                routes: analyzedRoutes.map((r) => ({
+                  total_duration: r.total_duration,
+                  fusion: r.accessibility_fusion
+                    ? {
+                        score: r.accessibility_fusion.score,
+                        state: r.accessibility_fusion.state,
+                        confidence: r.accessibility_fusion.confidence,
+                        alone_eligible: r.accessibility_fusion.alone_eligible,
+                        companied_recommended_reason:
+                          r.accessibility_fusion.companied_recommended_reason,
+                        sourcesUsed: r.accessibility_fusion.sourcesUsed,
+                        blockerCounts: r.accessibility_fusion.blockerCounts,
+                      }
+                    : null,
+                })),
+              },
+            }
+          : {}),
       };
 
       if (user.fcm_token) {
@@ -525,17 +757,27 @@ export class RoutesService {
 
   /**
    * Enriquece uma alternativa em paralelo, com orçamento cooperativo (`deadline`).
-   *  - Walks: imagens + elevação simultâneas, depois motor estrutural; Gemini de visão só
-   *    nos walks "quentes" (com bloqueador médio/alto, slope ou warning) priorizados.
-   *  - Não-walks: fotos best-effort.
+   *
+   * Pipeline (ver `ACCESSIBILITY_ROUTE_SPECIALIST.md` §5):
+   *  - Fase A (paralela por trecho walk): imagens + elevação + sinais estruturais (Overpass+ORS).
+   *  - Fase A.2 (paralela): Gemini visão só nos walks "quentes" pré-fusão + ainda dentro do limite global.
+   *  - Fase B (fusão): função pura `fuseWalkLeg` agrega tudo em LegFusionResult.
+   *  - Fase C (rota): `fuseRoute` agrega legs num score composto e flags.
    *  - POIs/Uber/clima: paralelo no fim, com fallback null se faltar tempo.
    */
   private async enrichSingleRouteOption(
     option: RouteOption,
     deadline?: Deadline,
   ) {
-    const enrichWalk = async (stage: RouteStage) => {
+    type WalkCollect = {
+      stage: RouteStage;
+      signals: WalkLegSignals;
+    };
+
+    const collectWalk = async (stage: RouteStage): Promise<WalkCollect> => {
       const walkCoordsOk = walkSegmentCoordsOk(stage);
+      const declaredWalkMeters = parseWalkDistanceToMeters(stage.distance);
+
       const imagesPromise = (async () => {
         try {
           const urls = await this.geminiService.resolveWalkStageImageUrls(stage);
@@ -555,6 +797,24 @@ export class RoutesService {
         : Promise.resolve(
             [] as Array<{ elevation: number; accessible: boolean; lat: number; lng: number }>,
           );
+      const structuralPromise = this.walkAccessibilityEngine
+        .collectWalkLegStructuralSignals({
+          stage,
+          slopePercent: null,
+          declaredWalkMeters,
+        })
+        .catch((e) => {
+          this.logger.warn(
+            `[checkRoute] sinais estruturais walk ignorados: ${(e as Error).message}`,
+          );
+          return {
+            walkCoordsOk,
+            slopePercent: null,
+            declaredWalkMeters,
+            overpass: { ok: false as const, reason: 'error' as const },
+            ors: { status: 'skipped' as const, reason: 'error' as const },
+          };
+        });
 
       const imagesGuarded = deadline
         ? deadline.race(imagesPromise, { fallback: undefined, label: 'walk_images', perCallMs: 6_000 })
@@ -562,48 +822,44 @@ export class RoutesService {
       const elevationGuarded = deadline
         ? deadline.race(elevationPromise, { fallback: [], label: 'elevation', perCallMs: 4_000 })
         : elevationPromise;
-      const [, elevations] = await Promise.all([imagesGuarded, elevationGuarded]);
+      const structuralGuarded = deadline
+        ? deadline.race(structuralPromise, {
+            fallback: {
+              walkCoordsOk,
+              slopePercent: null,
+              declaredWalkMeters,
+              overpass: { ok: false as const, reason: 'timeout' as const },
+              ors: { status: 'skipped' as const, reason: 'timeout' as const },
+            },
+            label: 'walk_structural',
+            perCallMs: 7_000,
+          })
+        : structuralPromise;
+
+      const [, elevations, structural] = await Promise.all([
+        imagesGuarded,
+        elevationGuarded,
+        structuralGuarded,
+      ]);
 
       let slopePercent: number | null = null;
       if (walkCoordsOk && elevations.length >= 2) {
-        const slope = this.calculateSlopePercentage(
+        slopePercent = this.calculateSlopePercentage(
           elevations[0].elevation,
           elevations[1].elevation,
           stage.location,
           stage.end_location,
         );
-        slopePercent = slope;
-        if (slope > 8) {
-          stage.accessible = false;
-          stage.slope_warning = true;
-          stage.warning =
-            stage.warning ??
-            `Trecho com inclinacao aproximada de ${slope.toFixed(1)}% (acima de 8%).`;
-        }
       }
 
-      try {
-        const structuralPromise = this.walkAccessibilityEngine.analyzeWalkLeg({
-          stage,
-          slopePercent,
-          declaredWalkMeters: parseWalkDistanceToMeters(stage.distance),
-        });
-        const structuralReport = deadline
-          ? await deadline.race(structuralPromise, {
-              fallback: { confidence: 'low', blockers: [], sources: ['structural_skipped'] },
-              label: 'walk_structural',
-              perCallMs: 7_000,
-            })
-          : await structuralPromise;
-        stage.accessibility_report = structuralReport;
-        this.walkAccessibilityEngine.applyStructuralFollowUps(stage, structuralReport);
-      } catch (structErr) {
-        this.logger.warn(
-          `[checkRoute] motor estrutural ignorado: ${(structErr as Error).message}`,
-        );
-      }
-
-      return { stage, walkCoordsOk };
+      const signals: WalkLegSignals = {
+        walkCoordsOk,
+        slopePercent,
+        declaredWalkMeters,
+        overpass: structural.overpass,
+        ors: structural.ors,
+      };
+      return { stage, signals };
     };
 
     const enrichTransitImages = async (stage: RouteStage) => {
@@ -624,74 +880,86 @@ export class RoutesService {
       return stage;
     };
 
-    /** Estágio "quente" merece análise de visão Gemini. */
-    const isHotWalk = (stage: RouteStage): boolean => {
-      if (stage.accessible === false) return true;
-      if (stage.slope_warning === true) return true;
-      const w = `${stage.warning ?? ''}`.trim();
-      if (w.length > 0) return true;
-      const blockers = stage.accessibility_report?.blockers ?? [];
-      return blockers.some((b) => b.severity === 'medium' || b.severity === 'high');
-    };
-
+    // Fase A — coleta paralela por trecho.
     const stageEnrichments: Promise<unknown>[] = [];
-    const walkResults: Array<{ stage: RouteStage; walkCoordsOk: boolean }> = [];
+    const walkResults: WalkCollect[] = [];
     for (const stage of option.stages) {
       if (isWalkStageMode(stage.mode)) {
-        stageEnrichments.push(
-          enrichWalk(stage).then((r) => walkResults.push(r)),
-        );
+        stageEnrichments.push(collectWalk(stage).then((r) => walkResults.push(r)));
       } else {
         stageEnrichments.push(enrichTransitImages(stage));
       }
     }
     await Promise.all(stageEnrichments);
 
-    /** Análise visual Gemini: priorizar walks quentes; respeitar limite global e orçamento. */
-    const hotWalks = walkResults
-      .filter((r) => r.walkCoordsOk && isHotWalk(r.stage))
-      .map((r) => r.stage);
-    const coldWalks = walkResults
-      .filter((r) => r.walkCoordsOk && !isHotWalk(r.stage))
-      .map((r) => r.stage);
-    const orderedWalks = [...hotWalks, ...coldWalks].slice(
+    // Pré-fusão (sem Gemini ainda) — só para priorizar Gemini nos walks "suspeitos".
+    const preFusion = walkResults.map((r) => ({
+      ...r,
+      preLeg: this.fusionService.fuseWalkLeg(r.signals),
+    }));
+
+    const isPreSuspect = (state: LegFusionResult['state']): boolean =>
+      state === 'unsafe' || state === 'caution' || state === 'unknown';
+    const hot = preFusion.filter((r) => r.signals.walkCoordsOk && isPreSuspect(r.preLeg.state));
+    const cold = preFusion.filter((r) => r.signals.walkCoordsOk && !isPreSuspect(r.preLeg.state));
+    const orderedWalksForGemini = [...hot, ...cold].slice(
       0,
       RoutesService.MAX_WALKING_STAGES_TO_ANALYZE,
     );
 
+    // Fase A.2 — Gemini visão em paralelo, só para os priorizados.
     await Promise.all(
-      orderedWalks.map(async (stage) => {
-        if (deadline?.expired()) return;
-        const midLat = (stage.location.lat + stage.end_location.lat) / 2;
-        const midLng = (stage.location.lng + stage.end_location.lng) / 2;
+      orderedWalksForGemini.map(async (item) => {
+        if (deadline?.expired()) {
+          item.signals.gemini = { state: 'unknown', reason: 'timeout' };
+          return;
+        }
+        const midLat = (item.stage.location.lat + item.stage.end_location.lat) / 2;
+        const midLng = (item.stage.location.lng + item.stage.end_location.lng) / 2;
         try {
-          const promise = this.geminiService.analyzeAccessibilityAt(midLat, midLng);
+          const promise = this.geminiService.analyzeWalkAccessibilityForFusion(
+            midLat,
+            midLng,
+          );
           const result = deadline
             ? await deadline.race(promise, {
-                fallback: { accessible: true, warning: null } as Awaited<typeof promise>,
+                fallback: { state: 'unknown' as const, reason: 'timeout' as const },
                 label: 'gemini_vision',
                 perCallMs: 6_000,
               })
             : await promise;
-          if (!result.accessible) {
-            stage.accessible = false;
-            stage.warning =
-              result.warning ??
-              'Possível obstáculo identificado nesse trecho — avalie se consegue passar ou prefira uma alternativa';
-          }
+          item.signals.gemini = result;
         } catch (gemErr) {
           this.logger.warn(
             `[checkRoute] Gemini walk skip: ${(gemErr as Error).message}`,
           );
+          item.signals.gemini = { state: 'unknown', reason: 'error' };
         }
       }),
     );
 
+    // Fase B — fusão final por trecho (puro). Aplicamos resultado nos campos legados
+    // (`accessible`, `warning`, `slope_warning`, `accessibility_report`) para manter compat,
+    // e expomos o resultado completo em `accessibility_fusion`.
+    for (const item of walkResults) {
+      const finalLeg = this.fusionService.fuseWalkLeg(item.signals);
+      this.applyLegFusionToStage(item.stage, finalLeg, item.signals);
+      (item as WalkCollect & { fusion?: LegFusionResult }).fusion = finalLeg;
+    }
+
     const analyzedStages: RouteStage[] = option.stages;
 
+    // Fase C — fusão por rota (composição dos legs walk).
+    const legResults: LegFusionResult[] = walkResults.map(
+      (r) =>
+        (r as WalkCollect & { fusion: LegFusionResult }).fusion ??
+        this.fusionService.fuseWalkLeg(r.signals),
+    );
+    const routeFusion = this.fusionService.fuseRoute(legResults);
+
     const routeAccessible = analyzedStages.every((s) => s.accessible);
-    const slope_warning = analyzedStages.some((stage) =>
-      (stage.warning ?? '').includes('acima de 8%'),
+    const slope_warning = analyzedStages.some(
+      (stage) => stage.slope_warning === true,
     );
     const firstPoint = analyzedStages[0]?.location;
     const guarded = <T>(p: Promise<T>, label: string, fallback: T): Promise<T> =>
@@ -748,6 +1016,7 @@ export class RoutesService {
           }
         : null,
       slope_warning,
+      accessibility_fusion: routeFusion,
       nearby_accessible_places: nearbyAccessiblePlaces,
       uber_estimate: cheapestUberEstimate
         ? {
@@ -757,6 +1026,90 @@ export class RoutesService {
           }
         : null,
       uber_deeplink: uberDeeplink,
+    };
+  }
+
+  /**
+   * Aplica resultado fusionado ao `RouteStage` mantendo compatibilidade com a API atual:
+   *  - `stage.accessible`: true salvo se fusão devolveu `unsafe`.
+   *  - `stage.slope_warning`: true se houve evidência `excessive_slope`.
+   *  - `stage.warning`: vem da fusão (não exclusivo do Gemini).
+   *  - `stage.accessibility_report`: derivado das `evidences` para callers existentes.
+   *  - `stage.accessibility_fusion`: resultado completo (UI/observabilidade).
+   */
+  private applyLegFusionToStage(
+    stage: RouteStage,
+    leg: LegFusionResult,
+    signals: WalkLegSignals,
+  ): void {
+    stage.accessibility_fusion = leg;
+
+    const blockers: LegAccessibilityBlocker[] = [];
+    for (const e of leg.evidences) {
+      if (e.metadata?.positive === true) continue;
+      if (e.kind === 'source_skipped') continue;
+      blockers.push(this.evidenceToLegBlocker(e));
+    }
+    const sources = Array.from(
+      new Set(
+        leg.evidences.flatMap((e) => {
+          if (e.kind === 'source_skipped') {
+            return [`${e.source}_${(e.metadata?.reason as string | undefined) ?? 'skipped'}`];
+          }
+          if (e.metadata?.positive === true) {
+            return [`${e.source}_ok`];
+          }
+          return [e.source];
+        }),
+      ),
+    );
+    const report: LegAccessibilityReport = {
+      confidence: leg.confidence,
+      blockers,
+      sources,
+    };
+    stage.accessibility_report = report;
+
+    if (leg.state === 'unsafe') {
+      stage.accessible = false;
+    } else if (leg.state === 'caution') {
+      // mantém accessible=true (cliente pode passar acompanhado); warning sinaliza atenção
+    } else if (leg.state === 'unknown') {
+      // não declaramos `accessible=false` por falta de dado; só registramos warning se for o caso
+    }
+
+    const slopeEvidence = leg.evidences.find(
+      (e) => e.kind === 'excessive_slope' && e.metadata?.positive !== true,
+    );
+    if (slopeEvidence) {
+      stage.slope_warning = true;
+    } else if (signals.slopePercent !== null && signals.slopePercent <= 8) {
+      stage.slope_warning = stage.slope_warning ?? false;
+    }
+
+    if (leg.warning && !stage.warning) {
+      stage.warning = leg.warning;
+    }
+  }
+
+  private evidenceToLegBlocker(
+    e: LegFusionResult['evidences'][number],
+  ): LegAccessibilityBlocker {
+    const map: Record<string, LegAccessibilityBlocker['type']> = {
+      missing_geometry: 'missing_geometry',
+      excessive_slope: 'excessive_slope',
+      moderate_slope: 'excessive_slope',
+      stairs_or_steps: 'stairs_or_steps',
+      rough_surface: 'rough_surface',
+      no_wheelchair_route: 'ors_no_wheelchair_route',
+      wheelchair_detour: 'ors_wheelchair_detour',
+      image_obstacle: 'vision_or_llm_warning',
+      transit_not_wheelchair: 'transit_not_wheelchair',
+    };
+    return {
+      type: map[e.kind] ?? 'other',
+      severity: e.severity,
+      detail: e.detail,
     };
   }
 
@@ -1059,5 +1412,41 @@ export class RoutesService {
       return error.message;
     }
     return String(error);
+  }
+
+  /**
+   * Log estruturado da fusão por rota: fontes usadas, contagens de blockers,
+   * decisão final (alone_eligible, motivo). Facilita debugging em produção
+   * sem expor `fusion_debug` no payload.
+   */
+  private logFusionSummaries(
+    telemetry: RouteCheckTelemetry,
+    routes: Array<{
+      total_duration?: string;
+      accessibility_fusion?: import('./contracts/route-accessibility-fusion.contract').RouteFusionResult;
+    }>,
+  ): void {
+    routes.forEach((route, idx) => {
+      const f = route.accessibility_fusion;
+      if (!f) return;
+      telemetry.mark('fusion_summary', {
+        idx,
+        total_duration: route.total_duration ?? null,
+        score: f.score,
+        state: f.state,
+        confidence: f.confidence,
+        alone_eligible: f.alone_eligible,
+        companied_recommended_reason: f.companied_recommended_reason,
+        blockers: f.blockerCounts,
+        sources: f.sourcesUsed,
+        legs: f.legResults.map((leg) => ({
+          state: leg.state,
+          score: leg.score,
+          confidence: leg.confidence,
+          sources: leg.sourcesUsed,
+          alerts: leg.alerts.length,
+        })),
+      });
+    });
   }
 }

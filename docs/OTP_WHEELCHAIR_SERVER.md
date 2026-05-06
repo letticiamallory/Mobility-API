@@ -28,5 +28,12 @@ Para penalizar paradas/viagens com acessibilidade desconhecida ou inacessível, 
 
 | Variável | Efeito |
 |----------|--------|
-| `OTP_URL` | Base do servidor OTP (ex.: `http://localhost:8080`) |
+| `OTP_URL` | Base do servidor OTP (fallback; único servidor se as regionais não forem definidas) |
+| `OTP_URL_MONTES_CLAROS` | Instância OTP para Montes Claros (usada quando origem e destino caem na bbox regional) |
+| `OTP_URL_BRASILIA` | Instância OTP para Brasília/DF |
+| `OTP_URL_SAO_PAULO` | Instância OTP para São Paulo/SPTrans |
+| `OTP_TIMEOUT_MS` | Timeout de chamada OTP em ms (default `4500`) |
+| `OTP_REQUIRED_IN_PROD` | Se `true`, exige pelo menos uma URL OTP válida em `NODE_ENV=production` |
 | `OTP_WHEELCHAIR_ROUTING` | `auto` (padrão), `always`, `never`, `alone` / `legacy` |
+
+Dois grafos locais com Docker: ver `otp/docker-compose.otp.yml` e `otp/README.md`.

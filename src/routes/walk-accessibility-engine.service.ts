@@ -6,6 +6,7 @@ import type {
   LegAccessibilityBlocker,
   LegAccessibilityReport,
 } from './contracts/route-accessibility.contract';
+import type { WalkLegSignals } from './contracts/route-accessibility-fusion.contract';
 import { walkSegmentCoordsOk } from './utils/stage-normalization.util';
 export type WalkLegAnalysisInput = {
   stage: RouteStage;
@@ -195,6 +196,96 @@ export class WalkAccessibilityEngineService {
     stage.warning =
       stage.warning ??
       'Próximo a escadas/degraus mapeados (OpenStreetMap). Prefira companhia ou outro trajeto se não puder usar degraus.';
+  }
+
+  /**
+   * Coleta sinais BRUTOS (sem normalização) das mesmas fontes estruturais usadas
+   * por `analyzeWalkLeg`, mas em formato compatível com o motor de fusão
+   * (`RouteAccessibilityFusionService`).
+   *
+   * Diferenças vs. `analyzeWalkLeg`:
+   *  - não emite `LegAccessibilityReport` agregado;
+   *  - traduz timeouts/erros em `{ ok: false, reason }` em vez de blockers high.
+   *
+   * NÃO chama Gemini nem OTP — esses sinais são adicionados pelo caller.
+   */
+  async collectWalkLegStructuralSignals(input: WalkLegAnalysisInput): Promise<
+    Pick<WalkLegSignals, 'walkCoordsOk' | 'slopePercent' | 'declaredWalkMeters' | 'overpass' | 'ors'>
+  > {
+    const { stage, slopePercent } = input;
+    const walkOk = walkSegmentCoordsOk(stage);
+    const declaredWalkMeters =
+      typeof input.declaredWalkMeters === 'number' ? input.declaredWalkMeters : null;
+
+    if (process.env.DISABLE_STRUCTURAL_ACCESSIBILITY === '1') {
+      return {
+        walkCoordsOk: walkOk,
+        slopePercent,
+        declaredWalkMeters,
+        overpass: { ok: false, reason: 'error', detail: 'structural_disabled' },
+        ors: { status: 'skipped', reason: 'no_key' },
+      };
+    }
+    if (!walkOk) {
+      return {
+        walkCoordsOk: false,
+        slopePercent,
+        declaredWalkMeters,
+      };
+    }
+
+    const overpassPromise = (async (): Promise<WalkLegSignals['overpass']> => {
+      try {
+        const r = await this.overpassService.getWalkSegmentStepBarriers(
+          stage.location.lat,
+          stage.location.lng,
+          stage.end_location.lat,
+          stage.end_location.lng,
+        );
+        if (r.queryFailed) {
+          return { ok: false, reason: 'error' };
+        }
+        return {
+          ok: true,
+          stepFeatureCount: r.stepFeatureCount,
+          roughSurfaceFeatureCount: r.roughSurfaceFeatureCount,
+        };
+      } catch (e) {
+        return { ok: false, reason: 'error', detail: (e as Error).message };
+      }
+    })();
+
+    const orsKey = `${process.env.ORS_API_KEY ?? ''}`.trim();
+    const orsPromise = (async (): Promise<WalkLegSignals['ors']> => {
+      if (orsKey.length === 0) {
+        return { status: 'skipped', reason: 'no_key' };
+      }
+      try {
+        const orsRoute = await this.orsService.calculateRoute(
+          stage.location.lat,
+          stage.location.lng,
+          stage.end_location.lat,
+          stage.end_location.lng,
+        );
+        if (!orsRoute) return { status: 'no_route' };
+        return {
+          status: 'ok',
+          distanceMeters: orsRoute.distance_meters,
+          durationMinutes: orsRoute.duration_minutes,
+        };
+      } catch (e) {
+        return { status: 'skipped', reason: 'error', detail: (e as Error).message };
+      }
+    })();
+
+    const [overpass, ors] = await Promise.all([overpassPromise, orsPromise]);
+    return {
+      walkCoordsOk: true,
+      slopePercent,
+      declaredWalkMeters,
+      overpass,
+      ors,
+    };
   }
 
   /** Escadas (OSM) + aviso ORS sem rota cadeira — chamar após analyzeWalkLeg. */

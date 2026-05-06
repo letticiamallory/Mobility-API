@@ -144,6 +144,65 @@ describe('route-scoring.util', () => {
     ).toBe(true);
   });
 
+  it('partition: rota com fusion.alone_eligible=false vai para Acompanhado mesmo com score alto', () => {
+    const route = {
+      accessible: true,
+      slope_warning: false,
+      total_duration: '12 min',
+      stages: [walk()],
+      accessibility_fusion: {
+        score: 90,
+        state: 'caution' as const,
+        confidence: 'low' as const,
+        alone_eligible: false,
+        companied_recommended_reason: 'Dados insuficientes',
+        sourcesUsed: [],
+        legResults: [],
+        blockerCounts: { high: 0, medium: 0, low: 0 },
+      },
+    };
+    const part = partitionRoutesByScore([route]);
+    expect(part.alone).toHaveLength(0);
+    expect(part.companied).toHaveLength(1);
+  });
+
+  it('score fusionado é o eixo principal: empurra rotas ruins para baixo do piso', () => {
+    const noisyStages = [
+      walk({
+        warning: 'obstaculo',
+        accessibility_report: {
+          confidence: 'medium',
+          blockers: [
+            { type: 'rough_surface', severity: 'medium' },
+            { type: 'ors_no_wheelchair_route', severity: 'medium' },
+          ],
+        },
+      }),
+    ];
+    const without = {
+      accessible: true,
+      slope_warning: false,
+      total_duration: '15 min',
+      stages: noisyStages,
+    };
+    const withFusionLow = {
+      ...without,
+      accessibility_fusion: {
+        score: 30,
+        state: 'caution' as const,
+        confidence: 'medium' as const,
+        alone_eligible: false,
+        companied_recommended_reason: 'piso baixo',
+        sourcesUsed: [],
+        legResults: [],
+        blockerCounts: { high: 0, medium: 2, low: 0 },
+      },
+    };
+    const a = computeAccessibilityScore(without);
+    const b = computeAccessibilityScore(withFusionLow);
+    expect(b).toBeLessThan(a);
+  });
+
   it('rota com score abaixo do piso vai para Acompanhado', () => {
     const lowScoreRoute = {
       accessible: true,

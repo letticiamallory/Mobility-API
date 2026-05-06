@@ -18,6 +18,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { PhotoCacheModule } from '../cache/photo-cache.module';
 import { OtpService } from './otp.service';
 import { WalkAccessibilityEngineService } from './walk-accessibility-engine.service';
+import { RouteAccessibilityFusionService } from './route-accessibility-fusion.service';
+import { AccessibilityLlmAgentService } from './accessibility-llm-agent.service';
 
 @Module({
   imports: [
@@ -40,6 +42,8 @@ import { WalkAccessibilityEngineService } from './walk-accessibility-engine.serv
     GoogleRoutesService,
     OtpService,
     WalkAccessibilityEngineService,
+    RouteAccessibilityFusionService,
+    AccessibilityLlmAgentService,
   ],
 })
 export class RoutesModule {}

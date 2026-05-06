@@ -1,0 +1,69 @@
+# OpenTripPlanner — Montes Claros + Brasília/DF (duas instâncias).
+#
+# Uso (na pasta otp/):
+#   docker compose -f docker-compose.otp.yml up
+#
+# Host:
+#   Montes Claros → http://localhost:8080
+#   Brasília      → http://localhost:8081
+#   São Paulo     → http://localhost:8082
+#
+# OTP 2.9.x exige JRE compatível com o bytecode do JAR (Java 25 no build atual).
+#
+# Pré-requisito: em cada pasta graphs/<cidade>/ deve existir graph.obj (build feito no host ou em CI).
+# O JAR otp-shaded-2.9.0.jar deve estar em otp/ (mesmo nível deste arquivo).
+
+services:
+  otp-montes-claros:
+    image: eclipse-temurin:25-jre-jammy
+    container_name: mobility-otp-montes-claros
+    volumes:
+      - ./graphs/montes-claros:/graphs:ro
+      - ./otp-shaded-2.9.0.jar:/otp.jar:ro
+    command:
+      - java
+      - -Xmx2048m
+      - -jar
+      - /otp.jar
+      - --load
+      - --serve
+      - /graphs
+    ports:
+      - "8080:8080"
+    mem_limit: 3g
+
+  otp-brasilia:
+    image: eclipse-temurin:25-jre-jammy
+    container_name: mobility-otp-brasilia
+    volumes:
+      - ./graphs/brasilia:/graphs:ro
+      - ./otp-shaded-2.9.0.jar:/otp.jar:ro
+    command:
+      - java
+      - -Xmx2048m
+      - -jar
+      - /otp.jar
+      - --load
+      - --serve
+      - /graphs
+    ports:
+      - "8081:8080"
+    mem_limit: 3g
+
+  otp-sao-paulo:
+    image: eclipse-temurin:25-jre-jammy
+    container_name: mobility-otp-sao-paulo
+    volumes:
+      - ./graphs/sao-paulo:/graphs:ro
+      - ./otp-shaded-2.9.0.jar:/otp.jar:ro
+    command:
+      - java
+      - -Xmx2048m
+      - -jar
+      - /otp.jar
+      - --load
+      - --serve
+      - /graphs
+    ports:
+      - "8082:8080"
+    mem_limit: 4g

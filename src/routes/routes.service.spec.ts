@@ -19,6 +19,8 @@ function createRoutesService(): RoutesService {
     noop,
     noop,
     noop,
+    noop,
+    noop,
   );
 }
 

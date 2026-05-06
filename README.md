@@ -65,7 +65,7 @@ mobility-api/
 | IA | Gemini (análise de imagens de trechos) |
 | E-mail | Resend (`RESEND_API_KEY`) |
 | Push | Firebase Admin (opcional) |
-| Outros | HERE, ORS, OpenWeather, Foursquare, Wheelmap, Nominatim, OTP local (`OTP_URL`) |
+| Outros | HERE, ORS, OpenWeather, Foursquare, Wheelmap, Nominatim, OTP (`OTP_URL`, opcionalmente `OTP_URL_MONTES_CLAROS` / `OTP_URL_BRASILIA` / `OTP_URL_SAO_PAULO`) |
 
 ---
 
@@ -121,7 +121,16 @@ A API escuta em **`http://0.0.0.0:3000`** por padrão (`PORT` configurável).
 | `OPENWEATHER_API_KEY` | Clima no trajeto |
 | `FOURSQUARE_API_KEY` | Pontos de interesse |
 | `WHEELMAP_API_KEY` | Locais acessíveis próximos |
-| `OTP_URL` | Serviço OTP de transporte público (default `http://localhost:8080`) |
+| `OTP_URL` | Base do servidor OTP (fallback e rotas fora das regiões configuradas) |
+| `OTP_URL_MONTES_CLAROS` | OTP dedicado a Montes Claros (bbox em `src/routes/utils/otp-region.util.ts`) |
+| `OTP_URL_BRASILIA` | OTP dedicado a Brasília/DF |
+| `OTP_URL_SAO_PAULO` | OTP dedicado a São Paulo/SPTrans |
+| `OTP_TIMEOUT_MS` | Timeout de chamada OTP em ms (default `4500`) |
+| `OTP_REQUIRED_IN_PROD` | Em produção, falha startup se **nenhuma** URL OTP estiver configurada (default `true`) |
+| `ACCESSIBILITY_AGENT_ENABLED` | Liga o agente LLM (Gemini) que rotula `alone`/`accompanied` por persona (default `true` quando há `GEMINI_API_KEY`). Veja `ACCESSIBILITY_LLM_AGENT_SPEC.md`. |
+| `ACCESSIBILITY_AGENT_MODEL` | Modelo Gemini usado pelo agente (default `gemini-2.5-flash-lite`) |
+| `ACCESSIBILITY_AGENT_ALONE_MIN_SCORE` | Score mínimo (0–100) para o agente rotular uma rota como `alone` (default `70`) |
+| `ACCESSIBILITY_AGENT_TIMEOUT_MS` | Timeout da chamada ao agente em ms (default `8000`) |
 | `RESEND_API_KEY` | Envio de e-mails de verificação / reset |
 | `RESEND_FROM_EMAIL` | Remetente |
 | `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` | Push notifications |

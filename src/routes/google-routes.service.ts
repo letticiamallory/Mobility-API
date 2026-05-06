@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Client } from 'pg';
 import type { LegAccessibilityReport } from './contracts/route-accessibility.contract';
+import type { LegFusionResult } from './contracts/route-accessibility-fusion.contract';
 
 interface TransitStep {
   html_instructions: string;
@@ -63,6 +64,12 @@ export interface RouteStage {
   street_view_images?: string[] | null;
   /** Fase 1+: motor estruturado (OSM, elevação, ORS opcional). */
   accessibility_report?: LegAccessibilityReport;
+  /**
+   * Resultado fusionado por trecho (especialista de acessibilidade).
+   * Eixo principal de decisão na Fase 4: `state`, `score`, `confidence`, `warning`,
+   * `alerts`, `sourcesUsed`. Mantido OPCIONAL para compatibilidade com clientes antigos.
+   */
+  accessibility_fusion?: LegFusionResult;
 }
 
 export interface RouteOption {
