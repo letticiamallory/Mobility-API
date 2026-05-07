@@ -550,6 +550,16 @@ export class RoutesService {
     return { routesAlone: aloneOut, routesCompanied: companiedOut };
   }
 
+  private coordsFromOptionalArgs(
+    lat?: number,
+    lon?: number,
+  ): { lat: number; lon: number } | null {
+    if (typeof lat !== 'number' || typeof lon !== 'number') return null;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    return { lat, lon };
+  }
+
   private haversineDistanceMeters(
     lat1: number,
     lon1: number,
@@ -570,8 +580,9 @@ export class RoutesService {
   private static readonly CHECK_ROUTE_DEADLINE_MS = (() => {
     const raw = `${process.env.ROUTES_CHECK_DEADLINE_MS ?? ''}`.trim();
     const n = parseInt(raw, 10);
-    if (!Number.isFinite(n) || n < 1000) return 13_000;
-    return Math.min(n, 60_000);
+    /** 28s: o app dispara várias buscas em paralelo; 13s cortava enriquecimento e voltava vazio. */
+    if (!Number.isFinite(n) || n < 1000) return 28_000;
+    return Math.min(n, 90_000);
   })();
 
   async checkRoute(
@@ -588,6 +599,10 @@ export class RoutesService {
     destination_title?: string,
     origin_address?: string,
     destination_address?: string,
+    origin_latitude?: number,
+    origin_longitude?: number,
+    destination_latitude?: number,
+    destination_longitude?: number,
   ): Promise<object> {
     const requestId = makeRouteCheckRequestId(user_id);
     const routeTelemetry = new RouteCheckTelemetry(this.logger, requestId);
@@ -640,12 +655,14 @@ export class RoutesService {
         transport_type === 'foot';
 
       const originCoordinates =
-        await this.nominatimService.getCoordinates(origin);
+        this.coordsFromOptionalArgs(origin_latitude, origin_longitude) ??
+        (await this.nominatimService.getCoordinates(origin));
       const destinationCoordinates =
-        await this.nominatimService.getCoordinates(
+        this.coordsFromOptionalArgs(destination_latitude, destination_longitude) ??
+        (await this.nominatimService.getCoordinates(
           destination,
           originCoordinates ?? undefined,
-        );
+        ));
       routeTelemetry.mark('geocode_done', {
         hasOrigin: !!originCoordinates,
         hasDestination: !!destinationCoordinates,
@@ -792,10 +809,18 @@ export class RoutesService {
         requestId,
         wheelchairRouting: this.otpWheelchairRouting(user, accompanied),
       });
-      const { routesAlone, routesCompanied, agentMeta } = this.applyAgentPartition({
+      const {
+        routesAlone: afterAgentAlone,
+        routesCompanied: afterAgentCompanied,
+        agentMeta,
+      } = this.applyAgentPartition({
         baseAlone: baseRoutesAlone,
         baseCompanied: baseRoutesCompanied,
         agentOutput: agentRun.output,
+      });
+      const { routesAlone, routesCompanied } = this.ensureNonEmptyTabs({
+        routesAlone: afterAgentAlone,
+        routesCompanied: afterAgentCompanied,
       });
       if (agentRun.output) {
         routeTelemetry.mark('agent_done', {

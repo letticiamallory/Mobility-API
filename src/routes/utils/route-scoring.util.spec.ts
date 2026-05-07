@@ -203,6 +203,33 @@ describe('route-scoring.util', () => {
     expect(b).toBeLessThan(a);
   });
 
+  it('partição: fallback quando todas as rotas ficam abaixo de 60 (não retorna listas vazias)', () => {
+    const lowRoute = {
+      accessible: false,
+      slope_warning: true,
+      total_duration: '50 min',
+      stages: [
+        walk({ accessible: false, slope_warning: true, duration: '50 min' }),
+      ],
+      accessibility_fusion: {
+        score: 20,
+        state: 'caution' as const,
+        confidence: 'high' as const,
+        alone_eligible: false,
+        companied_recommended_reason: 'Trecho difícil',
+        sourcesUsed: [],
+        legResults: [],
+        blockerCounts: { high: 1, medium: 0, low: 0 },
+      },
+    };
+    const s = computeAccessibilityScore(lowRoute);
+    expect(s).toBeLessThan(60);
+    const part = partitionRoutesByScore([lowRoute]);
+    expect(part.alone).toHaveLength(0);
+    expect(part.companied).toHaveLength(1);
+    expect(part.companied[0].accessibility_score).toBe(s);
+  });
+
   it('partition: rotas 60–79 vão para Acompanhado', () => {
     const midScoreRoute = {
       accessible: true,

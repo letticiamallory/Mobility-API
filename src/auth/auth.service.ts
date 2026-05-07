@@ -17,6 +17,7 @@ import { Resend } from 'resend';
 import { GoogleAuthDto } from './google-auth.dto';
 import { ResendService } from '../resend/resend.service';
 import { CreateUserDto } from '../users/dto/create-user.dto';
+import { parseOptionalAvatarPayload } from '../users/utils/avatar-payload.util';
 
 type ResetState = {
   codeHash: string;
@@ -169,6 +170,11 @@ export class AuthService {
     const verification_code = Math.floor(100000 + Math.random() * 900000).toString();
     const verification_code_expires_at = new Date(Date.now() + 15 * 60 * 1000);
 
+    const avatarParsed = parseOptionalAvatarPayload(
+      dto.avatar_base64 ?? null,
+      dto.avatar_mime ?? null,
+    );
+
     const user = this.usersRepository.create({
       name: dto.name.trim(),
       email: normalizedEmail,
@@ -177,6 +183,9 @@ export class AuthService {
       email_verified: false,
       verification_code,
       verification_code_expires_at,
+      ...(avatarParsed
+        ? { avatar_mime: avatarParsed.mime, avatar_data: avatarParsed.buffer }
+        : { avatar_mime: null, avatar_data: null }),
     });
     await this.usersRepository.save(user);
 
@@ -195,14 +204,30 @@ export class AuthService {
     return { message: 'Cadastro realizado! Verifique seu email.' };
   }
 
-  async verifyEmail(email: string, code: string): Promise<{ message: string }> {
+  async verifyEmail(
+    email: string,
+    code: string,
+  ): Promise<{ message: string; access_token: string; user_id: number; name: string }> {
     const normalizedEmail = email.trim().toLowerCase();
     const user = await this.usersRepository
       .createQueryBuilder('u')
       .where('LOWER(TRIM(u.email)) = :email', { email: normalizedEmail })
       .getOne();
     if (!user) throw new NotFoundException('Usuário não encontrado');
-    if (user.email_verified) throw new BadRequestException('Email já verificado');
+
+    /**
+     * UX: se o usuário já confirmou antes (ou fez duplo-clique / retry),
+     * não faz sentido bloquear com erro. Retorna token e segue o fluxo.
+     */
+    if (user.email_verified) {
+      const payload = { sub: user.id, email: user.email };
+      return {
+        message: 'Email já verificado.',
+        access_token: this.jwtService.sign(payload),
+        user_id: user.id,
+        name: user.name,
+      };
+    }
     if (user.verification_code !== code.trim())
       throw new BadRequestException('Código inválido');
     if (
@@ -217,7 +242,13 @@ export class AuthService {
     user.verification_code_expires_at = null;
     await this.usersRepository.save(user);
 
-    return { message: 'Email verificado com sucesso!' };
+    const payload = { sub: user.id, email: user.email };
+    return {
+      message: 'Email verificado com sucesso!',
+      access_token: this.jwtService.sign(payload),
+      user_id: user.id,
+      name: user.name,
+    };
   }
 
   async resendVerificationEmail(email: string): Promise<{ message: string }> {

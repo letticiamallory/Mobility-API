@@ -1,5 +1,15 @@
 import { Type } from 'class-transformer';
-import { IsNotEmpty, IsString, IsInt, IsOptional, Min, IsArray, IsIn } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsString,
+  IsInt,
+  IsOptional,
+  Min,
+  Max,
+  IsNumber,
+  IsArray,
+  IsIn,
+} from 'class-validator';
 
 export class CheckRouteDto {
   @Type(() => Number)
@@ -30,6 +40,35 @@ export class CheckRouteDto {
   @IsOptional()
   @IsString()
   destination_address?: string;
+
+  /** Quando presentes, a API usa coordenadas diretas (evita Nominatim falhar em `lat,lng`). */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  origin_latitude?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  origin_longitude?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  destination_latitude?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  destination_longitude?: number;
 
   @IsString()
   @IsNotEmpty()

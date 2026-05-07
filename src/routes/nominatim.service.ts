@@ -52,11 +52,29 @@ export class NominatimService {
    * Com `near`, pede vários candidatos, usa viewbox regional e escolhe o mais próximo de `near`
    * (ex.: destino perto da origem já geocodificada).
    */
+  /**
+   * Aceita strings `lat,lon` / `lat, lon` (mesmo formato do Google Directions).
+   * Evita depender do `/search` do Nominatim para coordenadas puras (costuma ser instável).
+   */
+  private parseLatLonLiteral(address: string): { lat: number; lon: number } | null {
+    const t = address.trim();
+    const m = /^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/.exec(t);
+    if (!m) return null;
+    const lat = parseFloat(m[1]);
+    const lon = parseFloat(m[2]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+    return { lat, lon };
+  }
+
   async getCoordinates(
     address: string,
     near?: { lat: number; lon: number },
   ): Promise<{ lat: number; lon: number } | null> {
     try {
+      const literal = this.parseLatLonLiteral(address);
+      if (literal) return literal;
+
       const limit = near ? 8 : 1;
       let url =
         `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}` +

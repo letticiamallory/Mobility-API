@@ -47,6 +47,15 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   google_id!: string | null;
 
+  /** MIME da foto de perfil (ex.: image/jpeg). */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  avatar_mime!: string | null;
+
+  /** Bytes da imagem (PostgreSQL bytea). Não serializar em JSON genérico. */
+  @Column({ type: 'bytea', nullable: true })
+  @Exclude()
+  avatar_data!: Buffer | null;
+
   @Column({ type: 'boolean', default: false })
   email_verified!: boolean;
 

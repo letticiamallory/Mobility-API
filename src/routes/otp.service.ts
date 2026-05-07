@@ -46,6 +46,14 @@ export class OtpService {
     min: 1000,
     max: 20000,
   });
+  /**
+   * Padrão 3500 m: com 1000 m o OTP frequentemente devolve **zero** itinerários
+   * (parada inicial longe), e o app parece “nunca achar trajeto”.
+   */
+  private readonly otpMaxWalkMeters = readIntEnv('OTP_MAX_WALK_METERS', 3500, {
+    min: 250,
+    max: 20000,
+  });
   private readonly otpRequiredInProd = readBooleanEnv(
     'OTP_REQUIRED_IN_PROD',
     true,
@@ -114,10 +122,18 @@ export class OtpService {
       `mode=${mode}&` +
       `wheelchair=${wheelchair}&` +
       `numItineraries=3&` +
-      `maxWalkDistance=1000`;
+      `maxWalkDistance=${this.otpMaxWalkMeters}`;
 
     try {
       const { data } = await axios.get(url, { timeout: this.otpTimeoutMs });
+      const itinCount = Array.isArray(data?.plan?.itineraries)
+        ? data.plan.itineraries.length
+        : 0;
+      if (itinCount === 0 && data?.plan?.error) {
+        this.logger.warn(
+          `[OTP] plan sem itinerários: ${JSON.stringify(data.plan.error)}`,
+        );
+      }
       return this.mapOtpResponse(data, wheelchair);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

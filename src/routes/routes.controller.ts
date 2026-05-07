@@ -61,16 +61,21 @@ export class RoutesController {
       body.destination_title,
       body.origin_address,
       body.destination_address,
+      body.origin_latitude,
+      body.origin_longitude,
+      body.destination_latitude,
+      body.destination_longitude,
     );
+  }
+
+  /** Rotas literais antes de `:id`, senão `GET /routes/history/1` casa com `:id = "history"` e quebra. */
+  @Get('history/:user_id')
+  async findHistoryByUserId(@Param('user_id', ParseIntPipe) user_id: number) {
+    return this.routesService.findHistoryByUserId(user_id);
   }
 
   @Get(':id')
   async getRouteById(@Param('id', ParseIntPipe) id: number) {
     return this.routesService.getRouteById(id);
-  }
-
-  @Get('history/:user_id')
-  async findHistoryByUserId(@Param('user_id', ParseIntPipe) user_id: number) {
-    return this.routesService.findHistoryByUserId(user_id);
   }
 }

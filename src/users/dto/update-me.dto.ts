@@ -41,4 +41,15 @@ export class UpdateMeDto {
   @IsString()
   @IsIn(['alone', 'companied'])
   accompanied?: string;
+
+  /** Base64 ou data URL; string vazia remove a foto do perfil. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(8_000_000)
+  avatar_base64?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  avatar_mime?: string;
 }

@@ -208,6 +208,20 @@ export function partitionRoutesByScore<T extends ScoredRoute>(
     .filter((r) => r.accessibility_score >= 60 && r.accessibility_score <= 79)
     .sort(sortFn);
 
+  if (
+    aloneCandidates.length === 0 &&
+    companiedCandidates.length === 0 &&
+    scored.length > 0
+  ) {
+    // Pontuação fusionada/legada pode deixar todas as rotas abaixo de 60 — antes sumiam
+    // das duas abas e a API devolvia lista vazia. Ainda mostramos as melhores opções.
+    const sorted = [...scored].sort(sortFn);
+    return {
+      alone: [],
+      companied: sorted.slice(0, ROUTES_COMPANIED_MAX),
+    };
+  }
+
   return {
     alone: aloneCandidates,
     companied: companiedCandidates,

@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { PhotoCacheService } from '../cache/photo-cache.service';
+import { StationsOsmCacheService, type OsmStationRow } from './stations-osm-cache.service';
+import { MONTES_CLAROS_STATION_CARDS } from './montes-claros-station-cards';
 
 type NearbyPlace = {
   place_id?: string;
@@ -37,7 +39,10 @@ function formatDistanceM(m: number): string {
 export class StationsService {
   private readonly logger = new Logger(StationsService.name);
 
-  constructor(private readonly photoCacheService: PhotoCacheService) {}
+  constructor(
+    private readonly photoCacheService: PhotoCacheService,
+    private readonly osmCache: StationsOsmCacheService,
+  ) {}
 
   async getStationPhoto(
     name: string,
@@ -107,6 +112,12 @@ export class StationsService {
    * resultado (evita timeout e estouro de cota).
    */
   async getNearby(lat: number, lng: number) {
+    // Montes Claros: usar estações pré-carregadas via OSM/Overpass (sem Google runtime).
+    if (this.isInMontesClarosArea(lat, lng)) {
+      const list = await this.osmCache.getMontesClarosStations();
+      return this.nearbyFromPreloaded(lat, lng, list);
+    }
+
     const apiKey =
       process.env.GOOGLE_MAPS_API_KEY ?? process.env.GOOGLE_API_KEY ?? '';
     if (!apiKey?.trim()) {
@@ -228,5 +239,42 @@ export class StationsService {
         rating: place.rating ?? null,
       };
     });
+  }
+
+  private isInMontesClarosArea(lat: number, lng: number): boolean {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+    // BBox aproximada (mesma ideia do app) — suficiente para escolher o dataset correto.
+    const south = -16.86;
+    const west = -44.08;
+    const north = -16.60;
+    const east = -43.78;
+    return lat >= south && lat <= north && lng >= west && lng <= east;
+  }
+
+  private nearbyFromPreloaded(lat: number, lng: number, list: OsmStationRow[]) {
+    const withDistance = list
+      .map((s) => {
+        const card = MONTES_CLAROS_STATION_CARDS[s.id];
+        const d = haversineMeters(lat, lng, s.lat, s.lng);
+        const linesFromOsm = Array.isArray(s.lines) ? [...s.lines] : [];
+        return {
+          id: s.id,
+          type: s.type,
+          name: card?.name ?? s.name,
+          address: (card?.address ?? s.address ?? '').trim(),
+          lat: s.lat,
+          lng: s.lng,
+          distanceNum: Math.round(d),
+          distance: formatDistanceM(d),
+          accessible: card?.accessible ?? s.accessible !== false,
+          lines: card?.lines?.length ? [...card.lines] : linesFromOsm,
+          nextBus: (card?.nextBus ?? null) as string | null,
+          rating: null as number | null,
+        };
+      })
+      .sort((a, b) => a.distanceNum - b.distanceNum);
+
+    // Mantém comportamento anterior: 28 itens.
+    return withDistance.slice(0, 28);
   }
 }

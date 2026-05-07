@@ -6,6 +6,10 @@ import { DisabilityType } from '../users/users.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateMeDto } from './dto/update-me.dto';
 import { AuthService } from '../auth/auth.service';
+import {
+  avatarToDataUrl,
+  parseOptionalAvatarPayload,
+} from './utils/avatar-payload.util';
 
 /*O injectable é o que diz pro nest.js que a nossa classe pode ser injetada em outras classes
 caso contrario, nossa controller não conseguiria usar a nossa service. */
@@ -41,6 +45,7 @@ export class UsersService {
     accompanied: string;
     phone: string | null;
     birth_date: string | null;
+    avatar_data_url: string | null;
   }> {
     if (await this.usersTableHasAccompaniedColumn()) {
       const user = await this.usersRepository.findOne({ where: { id } });
@@ -57,11 +62,12 @@ export class UsersService {
         accompanied: user.accompanied ?? 'companied',
         phone: user.phone ?? null,
         birth_date: user.birth_date ?? null,
+        avatar_data_url: avatarToDataUrl(user.avatar_mime, user.avatar_data),
       };
     }
 
     const rows = (await this.usersRepository.query(
-      `SELECT id, name, email, disability_type, phone, birth_date
+      `SELECT id, name, email, disability_type, phone, birth_date, avatar_mime, avatar_data
        FROM users
        WHERE id = $1
        LIMIT 1`,
@@ -73,6 +79,8 @@ export class UsersService {
       disability_type: DisabilityType;
       phone: string | null;
       birth_date: string | null;
+      avatar_mime: string | null;
+      avatar_data: Buffer | null;
     }>;
 
     if (rows.length === 0) {
@@ -89,6 +97,7 @@ export class UsersService {
       accompanied: 'companied',
       phone: user.phone ?? null,
       birth_date: user.birth_date ?? null,
+      avatar_data_url: avatarToDataUrl(user.avatar_mime, user.avatar_data),
     };
   }
 
@@ -107,6 +116,7 @@ export class UsersService {
     accompanied: string;
     phone: string | null;
     birth_date: string | null;
+    avatar_data_url: string | null;
   }> {
     const user = await this.usersRepository.findOne({ where: { id } });
     if (!user) {
@@ -139,6 +149,20 @@ export class UsersService {
       user.accompanied = dto.accompanied;
     }
 
+    if (dto.avatar_base64 !== undefined) {
+      const s = dto.avatar_base64.trim();
+      if (s.length === 0) {
+        user.avatar_data = null;
+        user.avatar_mime = null;
+      } else {
+        const parsed = parseOptionalAvatarPayload(s, dto.avatar_mime ?? null);
+        if (parsed) {
+          user.avatar_data = parsed.buffer;
+          user.avatar_mime = parsed.mime;
+        }
+      }
+    }
+
     const saved = await this.usersRepository.save(user);
     return {
       id: saved.id,
@@ -148,6 +172,7 @@ export class UsersService {
       accompanied: saved.accompanied ?? 'companied',
       phone: saved.phone ?? null,
       birth_date: saved.birth_date ?? null,
+      avatar_data_url: avatarToDataUrl(saved.avatar_mime, saved.avatar_data),
     };
   }
 
